@@ -5,13 +5,12 @@ name: Build and publish image
 # build the image as well but publish nothing - the point there is to find a
 # broken Dockerfile before it reaches main.
 #
-# ONE MANUAL STEP, once per repository: a new GHCR package is created PRIVATE,
-# even from a public repository, and no workflow setting changes that. A public
-# repo makes the package inherit its access *permissions* but not its
-# visibility, so an anonymous `docker pull` still fails until someone opens
-# Packages -> <package> -> Package settings -> Danger Zone -> Change visibility
-# and picks public. That choice is permanent - a public package cannot be made
-# private again.
+# Package visibility: created from a PUBLIC repository, the package comes out
+# public and can be pulled anonymously - verified against the registry API, no
+# manual step needed. From a private repository it is private, and making it
+# public is a one-time click under Packages -> <package> -> Package settings ->
+# Danger Zone -> Change visibility. That choice is permanent: a public package
+# cannot be made private again.
 
 on:
   push:
