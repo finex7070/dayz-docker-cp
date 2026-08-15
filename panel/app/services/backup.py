@@ -218,6 +218,15 @@ class BackupService:
         self._overview: dict | None = None
         self._overview_lock = threading.Lock()
 
+    def clean(self, text: str) -> str:
+        """Strip the volume prefix out of a message restic wrote itself.
+
+        restic is given absolute paths and repeats them in its errors. /data is
+        where the container keeps things, not where the operator finds them, so
+        no message reaches the UI carrying it.
+        """
+        return (text or "").replace(str(self.settings.paths.data).rstrip("/") + "/", "")
+
     def label(self, path: Path) -> str:
         """A path as the operator sees it: relative to the data volume.
 
@@ -342,7 +351,7 @@ class BackupService:
             timeout=timeout,
         )
         if result.returncode != 0:
-            raise BackupError(_message(result.stderr or result.stdout, args))
+            raise BackupError(_message(self.clean(result.stderr or result.stdout), args))
         return result.stdout
 
     def _run_json(self, args: list[str], timeout: int = READ_TIMEOUT):
@@ -374,7 +383,7 @@ class BackupService:
 
         def drain() -> None:
             for line in proc.stderr:
-                text, is_problem = _readable(line.rstrip())
+                text, is_problem = _readable(self.clean(line.rstrip()))
                 if not text:
                     continue
                 if is_problem:
@@ -527,6 +536,12 @@ class BackupService:
                           self._tracked(lambda job: self._delete(job, snapshot_id)))
 
     def start_retention(self) -> Job:
+        if not self.initialised:
+            # Not a job that fails: there is simply nothing to apply the rules
+            # to, and creating a repository would be a strange way to say so.
+            raise BackupError(
+                "There are no backups yet - the rules apply from the first one."
+            )
         return jobs.start("backup_forget", "Applying the retention rules",
                           self._tracked(lambda job: self._forget(job, self.store.current)))
 
@@ -640,6 +655,11 @@ class BackupService:
         if not settings.has_retention:
             job.log_line("[panel] No retention rules are set - nothing is deleted.")
             job.detail = keep_detail or "No retention rules are set"
+            return
+
+        if not self.initialised:
+            job.log_line("[panel] There is no repository yet - nothing to clean up.")
+            job.detail = keep_detail or "No backups yet"
             return
 
         # Without --group-by the rules are applied per host and path. Docker
