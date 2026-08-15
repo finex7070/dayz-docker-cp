@@ -134,6 +134,17 @@
     }
     if (!job.is_final) wasUnfinished = true;
 
+    // A job that had already finished when this page opened is history, not
+    // something happening now. Its output would otherwise sit here for days,
+    // under a card whose subtitle is supposed to say when the server files
+    // were last updated.
+    if (job.is_final && !wasUnfinished) {
+      el.outputWrap.hidden = true;
+      if (!blocked) el.detail.textContent = baseDetail;
+      schedule(blocked ? BUSY_MS : IDLE_MS);
+      return;
+    }
+
     el.outputWrap.hidden = false;
     el.title.textContent = job.title;
     setBadge(job.state);
