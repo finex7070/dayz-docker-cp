@@ -296,6 +296,10 @@ re-download those.
 
 ## Release notes
 
+**1.0.1** — *Apply retention now* no longer fails on a fresh install, where
+there is no repository yet; paths from the container no longer appear in
+messages that come from restic.
+
 **1.0.0** — First public release. Server control, SteamCMD, mods, settings,
 logs, live console with RCON, schedules, file browser and deduplicated backups.
 

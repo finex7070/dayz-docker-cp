@@ -94,7 +94,8 @@
       <button class="btn btn-primary" type="submit">Save</button>
       <button class="btn btn-outline-secondary" type="button"
               data-backup-action="retention"
-              {% if not current.has_retention %}disabled{% endif %}>Apply retention now</button>
+              {# Needs both: rules to apply, and something to apply them to. #}
+              {% if not current.has_retention or not snapshots %}disabled{% endif %}>Apply retention now</button>
     </div>
   </form>
 </div>
