@@ -1,0 +1,327 @@
+# DayZ Server + Control Panel
+
+**A DayZ dedicated server in one container, with a web panel that runs it.**
+Install the server files, manage mods, edit the config, schedule restarts,
+browse files and take deduplicated backups — all from the browser. No shell,
+no SteamCMD prompts, no config files edited over SSH.
+
+Created by Jan Hüls "finex7070" 🚀
+
+**→ [Get it running in four steps](#installation)** &nbsp;·&nbsp;
+[Configuration](#configuration)
+
+---
+
+## What it is
+
+One image, `ghcr.io/finex7070/dayz-docker-cp`, containing SteamCMD, the DayZ
+Linux server and a Flask control panel. The **panel boots first** and owns
+everything else: it downloads the server files, writes the config, starts and
+supervises the server process, and stays up when the server is down — which is
+exactly when you need it.
+
+Everything that survives a container recreate lives in one volume, `/data`.
+Delete the container, keep the volume, and your server is unchanged.
+
+---
+
+## Features
+
+- **🎮 Server control** — Start, restart and stop from the dashboard, with live
+  status: state, uptime, player count (Steam A2S), CPU and memory against the
+  container's actual limits. A crashed server is restarted automatically if you
+  let it.
+- **📦 SteamCMD without a terminal** — Install and update the server files from
+  the browser, with live output and a **Steam Guard prompt** in the UI. The
+  panel remembers when the files were last updated and last checked.
+- **🧩 Mod management** — Install workshop mods by ID, URL or search, set each
+  one as a client mod (`-mod`) or server-only mod (`-serverMod`), reorder the
+  load order, update, reinstall or remove. Signature keys are copied along
+  automatically.
+- **⚙️ Settings, not text editors** — Launch parameters and the important
+  `serverDZ.cfg` values as real forms with validation. Five values are written
+  for you before every start, so they can never drift: `steamQueryPort`, the
+  mission in `class Missions`, `RConPort`/`RConPassword` and `maxcores` in
+  `dayzsetting.xml`.
+- **🖥️ Live console and RCON** — The server's output streams into the dashboard
+  as it happens. BattlEye RCON is built in: send commands, lock and unlock the
+  server, see kicks and bans as they occur.
+- **⏰ Schedules** — Recurring tasks in crontab format, each with a *chain* of
+  actions. The one everybody wants: announce → lock → stop → back up → start,
+  as a single entry that cannot fall out of sync with itself.
+- **📁 File browser** — Browse `server/`, edit text files in the browser
+  (`Ctrl+S` saves), upload, download, rename, move and delete — with bulk
+  actions. Binary files are recognised and offered for download instead of
+  being destroyed by a text editor.
+- **💾 Deduplicated backups** — Snapshots of the whole server directory powered
+  by [restic](https://restic.net/). The first costs the full size, every later
+  one only what changed: **3.8 GB read, 4.8 KB stored** for a second snapshot
+  taken minutes later. Restore, download as `.tar`, delete, and retention rules
+  (keep last N / delete after X days).
+- **📜 Logs and audit trail** — `*.RPT`, `*.ADM` and script logs by type and
+  file, with filtering, auto-reload and download. A second tab records what was
+  done *in the panel*: who restarted the server, who changed which setting.
+- **🔒 Sensible defaults** — Login with rate limiting, CSRF protection,
+  reverse-proxy aware cookies, an upload cap, and a file browser that cannot be
+  talked out of its root directory — not even with a symlink.
+
+---
+
+## Screenshots
+
+### Dashboard
+
+Server files with the build and check dates, live status tiles, the controls,
+and the server's own output streaming in — with an RCON prompt underneath it.
+
+![Dashboard](docs/img/dashboard.png)
+
+### Mods
+
+Workshop mods by ID, URL or search. Each one is a client mod or a server-only
+mod, and the order in this list is the order on the command line.
+
+![Mods](docs/img/mods.png)
+
+### Settings
+
+Launch parameters as a form. The CPU count writes `-cpuCount` *and* `maxcores`
+in `dayzsetting.xml`; the mission is written into `class Missions` on every
+start.
+
+![Settings, general](docs/img/settings-general.png)
+
+The `serverDZ.cfg` values worth changing, with the documented ranges enforced.
+Everything not on this form — comments, hand-added options — stays untouched in
+the file.
+
+![Settings, serverDZ](docs/img/settings-serverdz.png)
+
+### Schedules
+
+Crontab expressions, each with a chain of actions that runs top to bottom and
+stops at the first failure.
+
+![Schedules](docs/img/schedules.png)
+
+### Files
+
+The server directory in the browser: edit text files, upload, download, rename,
+move, delete, with bulk actions and a `..` row instead of an up button.
+
+![Files](docs/img/files.png)
+
+### Backups
+
+Snapshots with what each one *stored* rather than only what it contains,
+retention rules, and restore or download per snapshot.
+
+![Backups](docs/img/backups.png)
+
+---
+
+## Requirements
+
+- **Docker** with Compose v2 (Docker Desktop, or Docker Engine on Linux)
+- **A Steam account that owns DayZ.** App 223350 cannot be downloaded
+  anonymously. Steam Guard is supported.
+- **~10 GB of disk** for the server files, plus room for mods and backups
+- **Open ports** for the game: UDP `2302-2304`, `2305` (RCON), `27016` (Steam
+  query) and `8766` (Steam master). The panel itself is TCP `8080`.
+
+---
+
+## Installation
+
+1. **Create a folder and fetch the two files you need:**
+
+   ```bash
+   mkdir dayz && cd dayz
+   curl -O https://raw.githubusercontent.com/finex7070/dayz-docker-cp/main/docker-compose.yml
+   curl -O https://raw.githubusercontent.com/finex7070/dayz-docker-cp/main/.env.example
+   mv .env.example .env
+   ```
+
+2. **Fill in `.env`.** The bare minimum:
+
+   ```ini
+   ADMIN_PASSWORD=pick-something-long
+   STEAM_USERNAME=your_steam_login
+   STEAM_PASSWORD=your_steam_password
+   ```
+
+   The container refuses to start without `ADMIN_PASSWORD`. Comments in `.env`
+   belong on their own line — Docker Compose only strips a trailing `#` comment
+   from a value that is not empty.
+
+3. **Pull the image and start it:**
+
+   ```bash
+   docker compose pull
+   docker compose up -d
+   ```
+
+   Pull first: the compose file also carries a `build:` section for people
+   working on the source, and without an image present Compose would try to
+   build one — in a folder that has no Dockerfile.
+
+4. **Open** `http://<host>:8080` and log in with `ADMIN_USERNAME` /
+   `ADMIN_PASSWORD`.
+
+To update later: `docker compose pull && docker compose up -d`. Your `/data`
+volume is untouched.
+
+<details>
+<summary>Building from source instead of pulling</summary>
+
+```bash
+git clone https://github.com/finex7070/dayz-docker-cp.git
+cd dayz-docker-cp
+cp .env.example .env      # then edit it
+docker compose build
+docker compose up -d
+```
+
+The compose file names the published image, so a local build simply replaces
+it under the same tag.
+</details>
+
+---
+
+## Getting started
+
+1. **Install the server files.** The dashboard opens on the *Server files*
+   card. With `AUTO_INSTALL=true` (the default) the download already started;
+   otherwise press *Install server files*. It is several GB, so it takes a
+   while, and the output runs live.
+2. **Answer Steam Guard** if asked. The code field appears on the dashboard —
+   the code goes straight to the running SteamCMD process and is never stored.
+3. **Set an RCON password** under *Settings → General → BattlEye*. Without one
+   RCON stays off, and with it you get the console, lock/unlock and everything
+   the scheduler can do. Note that BattlEye only opens its port about two
+   minutes after a start, once the mission has loaded.
+4. **Add your mods** on the *Mods* page, by workshop ID or URL. Set client
+   versus server mods, then put the load order right with the arrows.
+5. **Check the launch parameters** under *Settings → General* — mission, CPU
+   count, FPS limit, logging switches.
+6. **Press Start** on the dashboard and watch the console.
+
+---
+
+## Configuration
+
+Everything that has to match how the container was created lives in `.env`.
+Everything else — mission, mods, launch switches, RCON password, schedules,
+retention — is edited in the panel and stored in the volume.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / — | Panel login. The password is **required**. |
+| `PANEL_PORT` | `8080` | Port of the web panel. |
+| `STEAM_USERNAME` / `STEAM_PASSWORD` | — | Steam account owning DayZ. |
+| `STEAM_GUARD_CODE` | — | Only for the very first login; otherwise enter it in the panel. |
+| `STEAM_API_KEY` | — | Optional, only for workshop *search*. Installing by ID works without it. |
+| `SERVER_REAL_IP` | — | Public address, shown on the dashboard with a copy button. Display only. |
+| `SERVER_PORT` | `2302` | Game port. |
+| `STEAM_QUERY_PORT` | `27016` | Written into `serverDZ.cfg` before every start. |
+| `RCON_PORT` | `2305` | Written into `beserver_x64.cfg` before every start. |
+| `AUTO_INSTALL` | `true` | Install the server files on container start if missing. |
+| `AUTO_START` | `false` | Start the server once the files are there. |
+| `MAX_UPLOAD_MB` | `64` | Upload limit of the Files page (and of every request). |
+| `TRUSTED_PROXY_IPS` | — | Proxies whose `X-Forwarded-*` headers are honoured. Empty = ignored. |
+| `SESSION_COOKIE_SECURE` | `auto` | `auto` sets the Secure flag on HTTPS requests only. |
+| `PUID` / `PGID` | `1000` | Owner of the bind mount on Linux hosts (`id -u`, `id -g`). |
+| `TZ` | `Europe/Berlin` | Container timezone — schedules and log timestamps follow it. |
+
+The full list with comments is in [.env.example](.env.example).
+
+### The `/data` volume
+
+```
+data/
+├── panel/     panel settings, mod list, schedules, audit log
+├── steam/     Steam home: sentry file, SteamCMD runtime, workshop downloads
+├── server/    the DayZ server: binaries, mpmissions/, keys/, @mods, profiles/
+└── backup/    the restic repository, its key
+```
+
+### Behind a reverse proxy
+
+Set `TRUSTED_PROXY_IPS` to your proxy's address or network (e.g.
+`172.16.0.0/12`), otherwise the panel sees the proxy as the client — which
+breaks the login rate limit and HTTPS detection. TLS itself belongs on the
+proxy; the panel deliberately does not terminate it.
+
+---
+
+## Backups
+
+> ### Keep a copy of the key
+>
+> Backups are **encrypted**, and the key lives beside them in
+> `data/backup/backup_key`. It is created with your first backup and never
+> changes.
+>
+> **Without that file the repository cannot be read**, not even by this panel.
+> Keep a copy of it somewhere else — it is 65 bytes, and it is the difference
+> between having backups and having 2 GB of noise.
+>
+> Because the key sits next to the repository, copying `data/backup` elsewhere
+> copies the key with it. If you push backups to a NAS or cloud storage where
+> that matters, leave `backup_key` out of that copy and store it separately.
+>
+> If it goes missing while the repository exists, the panel deliberately does
+> **not** create a new one — a new key would turn "the file is gone" into
+> "wrong password", which is far harder to work out.
+
+**Retention:** *keep last N* and *delete after X days* may both be set. A
+snapshot survives if **either** rule keeps it — an or, not an and. An age rule
+alone can never empty the repository: the newest snapshot always stays.
+
+**Restoring** stops the server, takes a `pre-restore` snapshot of the current
+state, puts the directory back and starts the server again. Files that do not
+exist in the snapshot are **deleted** — otherwise it would be a copy over the
+top, and a botched mod update would survive its own restore.
+
+**A snapshot taken while the server runs** is tagged `hot`: persistence is
+being written during it, so it is not a consistent point in time. That is what
+the `stop → backup → start` chain in the scheduler is for.
+
+By default the whole server directory is backed up, so a restored snapshot is a
+server that starts without SteamCMD. If you would rather keep the repository
+small, exclude `addons` and `dta` on the Backups page — Steam can always
+re-download those.
+
+---
+
+## Release notes
+
+**1.0.0** — First public release. Server control, SteamCMD, mods, settings,
+logs, live console with RCON, schedules, file browser and deduplicated backups.
+
+---
+
+## License
+
+GNU Affero General Public License v3.0 (AGPLv3)
+
+This project is open-source and available under the AGPLv3 license.
+
+✅ Commercial Use: You are free to run this on commercial game servers, including monetised ones.
+✅ Modification: You are free to modify the code to suit your needs.
+🔄 Copyleft: If you distribute a modified version — or make one available to others — you must release your modifications under the same AGPLv3 license. Closed-source proprietary forks are not allowed.
+
+See the [LICENSE](LICENSE) file for full details.
+
+> "DayZ" is a product of Bohemia Interactive a.s.; "Steam" and "SteamCMD" are
+> products of Valve Corporation. This project automates their tools but is not
+> affiliated with, sponsored by or endorsed by either company.
+>
+> No game files are distributed here. The image ships SteamCMD and downloads
+> the DayZ server files from Steam with **your own account**, under Bohemia
+> Interactive's and Valve's terms — which is why the container needs a Steam
+> login that owns DayZ.
+
+---
+
+> Made with ❤️ by Jan Hüls "finex7070"

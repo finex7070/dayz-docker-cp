@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block heading %}Logs{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/logs.js') }}"
+        data-files-url="{{ url_for('logs.files_json') }}"
+        data-content-url="{{ url_for('logs.content_json') }}"
+        data-stat-url="{{ url_for('logs.stat_json') }}"
+        data-download-url="{{ url_for('logs.download') }}"
+        data-type="{{ current_type }}"></script>
+{% endblock %}
+
+{% block content %}
+
+{# Two views, not two pages: both answer "what happened", one from the game's
+   side and one from the panel's. #}
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-files"
+            type="button" role="tab">Server logs</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-audit"
+            type="button" role="tab">Panel actions</button>
+  </li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="tab-files" role="tabpanel">
+
+<div class="card" id="log-card">
+  <div class="card-body pb-2">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label" for="log-type">Type</label>
+        <select class="form-select" id="log-type">
+          {% for log_type in log_types %}
+            <option value="{{ log_type.id }}" title="{{ log_type.detail }}"
+                    {% if log_type.id == current_type %}selected{% endif %}>{{ log_type.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label" for="log-file">File</label>
+        <select class="form-select" id="log-file"></select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label" for="log-filter">Filter</label>
+        <input class="form-control" id="log-filter" type="search" spellcheck="false"
+               placeholder="show only lines containing ...">
+      </div>
+
+      <div class="col-md-2 d-flex gap-2 justify-content-md-end">
+        <a class="btn btn-outline-secondary w-100" id="log-download" download>Download</a>
+      </div>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3 small text-secondary gap-3 flex-wrap">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="log-autoreload">
+        <label class="form-check-label" for="log-autoreload">
+          Reload automatically when the file changes
+        </label>
+      </div>
+      <span id="log-detail"></span>
+    </div>
+  </div>
+
+  <div class="card-body pt-2">
+    <pre class="job-output log-output" id="log-output"></pre>
+    <div class="alert alert-secondary mt-2 mb-0 py-2 small" id="log-truncated" hidden>
+      The file is large - only the last part is shown here. Use Download for
+      the complete file.
+    </div>
+  </div>
+</div>
+
+</div>{# /tab-files #}
+
+<div class="tab-pane fade" id="tab-audit" role="tabpanel">
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>Who did what in the panel</span>
+      <span class="small text-secondary">newest first, last {{ audit | length }}</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in audit %}
+            <tr class="{{ '' if entry.ok else 'table-danger' }}">
+              <td class="small text-nowrap">{{ entry.time_text }}</td>
+              <td class="small">{{ entry.user }}<br>
+                <span class="text-secondary">{{ entry.ip }}</span></td>
+              <td class="small font-monospace">{{ entry.action }}</td>
+              <td class="small">{{ entry.target }}</td>
+              <td class="small text-secondary">{{ entry.detail }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-secondary">Nothing recorded yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="text-secondary small mt-3">
+    Written to <code>panel/audit.log</code> as one JSON object per line, so it
+    can be read with <code>tail</code> and <code>grep</code> on the host. It is a
+    record for people running a server together, not evidence: anyone with
+    access to the volume can change it.
+  </p>
+</div>
+
+</div>{# /tab-content #}
+
+{% endblock %}

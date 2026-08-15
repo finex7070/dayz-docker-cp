@@ -1,0 +1,71 @@
+{# Base layout: sidebar navigation, flash messages, content block. #}
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ self.heading() }}{% endblock %} &middot; DayZ Control Panel</title>
+  {# Bootstrap is vendored into the image at build time - no CDN at runtime,
+     the panel must work on a host without outbound internet access. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('dashboard.index') }}">
+      <span class="brand-mark">DZ</span>
+      <span>
+        <strong>Control Panel</strong>
+        <small>v{{ panel_version }}</small>
+      </span>
+    </a>
+
+    <nav class="nav flex-column">
+      {% for item in nav_items %}
+        {% set active = request.endpoint and request.endpoint.startswith(item.endpoint.split('.')[0] + '.') %}
+        <a class="nav-link{{ ' active' if active }}" href="{{ url_for(item.endpoint) }}">
+          {{ item.label }}
+          {% if item.phase %}<span class="badge-phase" title="Arrives in phase {{ item.phase }}">P{{ item.phase }}</span>{% endif %}
+        </a>
+      {% endfor %}
+    </nav>
+
+    <form class="sidebar-foot" method="post" action="{{ url_for('auth.logout') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="signed-in">Signed in as <strong>{{ current_user.username }}</strong></div>
+      <button class="btn btn-outline-secondary btn-sm w-100" type="submit">Sign out</button>
+    </form>
+  </aside>
+
+  <main class="content">
+    <header class="content-head">
+      <h1>{% block heading %}{% endblock %}</h1>
+      <div>{% block head_actions %}{% endblock %}</div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flashes">
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+              {{ message }}
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+</div>
+
+<script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

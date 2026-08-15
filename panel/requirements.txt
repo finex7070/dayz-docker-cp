@@ -1,0 +1,26 @@
+# Control panel - runtime dependencies
+#
+# Deliberately pinned as ranges (major fixed, minor open): reproducible enough
+# for the build without invalidating the layer on every patch release.
+
+# Web
+Flask>=3.0,<4.0
+Werkzeug>=3.0,<4.0
+Jinja2>=3.1,<4.0
+
+# Auth, forms, protection
+Flask-Login>=0.6,<0.7
+Flask-WTF>=1.2,<2.0
+Flask-Limiter>=3.5,<4.0
+
+# Persistence
+SQLAlchemy>=2.0,<3.0
+
+# Process and system information (status, RAM/CPU of the server process)
+psutil>=5.9,<7.0
+
+# Scheduled restarts (phase 7)
+APScheduler>=3.10,<4.0
+
+# WSGI server
+gunicorn>=22.0,<24.0

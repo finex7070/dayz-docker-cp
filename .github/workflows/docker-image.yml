@@ -1,0 +1,104 @@
+name: Build and publish image
+
+# Pushes to main publish ghcr.io/<owner>/<repo>:latest, so a server can be
+# updated with `docker compose pull` instead of a local build. Pull requests
+# build the image as well but publish nothing - the point there is to find a
+# broken Dockerfile before it reaches main.
+#
+# ONE MANUAL STEP, once per repository: a new GHCR package is created PRIVATE,
+# even from a public repository, and no workflow setting changes that. A public
+# repo makes the package inherit its access *permissions* but not its
+# visibility, so an anonymous `docker pull` still fails until someone opens
+# Packages -> <package> -> Package settings -> Danger Zone -> Change visibility
+# and picks public. That choice is permanent - a public package cannot be made
+# private again.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# Two pushes in a row: the older build is pointless the moment the newer one
+# starts. Tag builds are never cancelled - those are releases.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # required to push to GHCR
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=DayZ Server + Control Panel
+            org.opencontainers.image.description=DayZ server with a web control panel for SteamCMD, mods, settings, schedules, files and backups
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Attestations would add an "unknown/unknown" entry beside every real
+          # tag on the packages page. Nothing here needs them.
+          provenance: false
+          sbom: false
+
+      - name: Smoke test the image
+        # A green build only proves the layers assembled. This proves the panel
+        # actually boots inside them - the failure mode that would otherwise be
+        # found by whoever pulls the image next.
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          image="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          # AUTO_INSTALL off: without Steam credentials the boot job could only
+          # fail, and its noise would hide whatever the test is meant to catch.
+          docker run -d --name smoke -p 8080:8080 \
+            -e ADMIN_PASSWORD=smoke-test -e AUTO_INSTALL=false "$image"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz; then
+              echo; echo "The panel answers."; docker rm -f smoke; exit 0
+            fi
+            sleep 2
+          done
+          echo "The panel did not come up:"; docker logs smoke; docker rm -f smoke; exit 1

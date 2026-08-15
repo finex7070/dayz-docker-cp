@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block heading %}Mods{% endblock %}
+
+{% block head_actions %}
+  <button class="btn btn-outline-primary btn-sm" data-mod-action="update-all"
+          {% if not mods %}disabled{% endif %}>Update all</button>
+{% endblock %}
+
+{% block content %}
+
+{# ---- add a mod ---- #}
+<div class="card mb-3">
+  <div class="card-header">Add a mod</div>
+  <div class="card-body">
+
+    <div class="row g-2 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label" for="mod-query">Workshop ID or URL</label>
+        <input class="form-control" id="mod-query" placeholder="1559212036 or https://steamcommunity.com/sharedfiles/filedetails/?id=...">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="mod-type">Type</label>
+        <select class="form-select" id="mod-type">
+          <option value="client">Client mod (-mod)</option>
+          <option value="server">Server mod (-serverMod)</option>
+        </select>
+      </div>
+      <div class="col-md-3 d-flex gap-2">
+        <button class="btn btn-outline-secondary flex-fill" data-mod-action="lookup">Look up</button>
+        <button class="btn btn-primary flex-fill" data-mod-action="install">Install</button>
+      </div>
+    </div>
+
+    <div class="form-text mt-2">
+      A client mod is loaded by players too and its <code>.bikey</code> goes into
+      the server's keys directory. A server mod runs on the server alone, so it
+      gets no key.
+    </div>
+
+    <div id="mod-lookup" class="alert alert-secondary mt-3" hidden></div>
+  </div>
+</div>
+
+{# ---- search ---- #}
+<div class="card mb-3">
+  <div class="card-header">Search the workshop</div>
+  <div class="card-body">
+    {% if search_enabled %}
+      <div class="input-group">
+        <input class="form-control" id="mod-search" placeholder="Search DayZ workshop...">
+        {# Hidden until there are results: a Clear next to an empty field is a
+           button whose click explains nothing. #}
+        <button class="btn btn-outline-secondary" data-mod-action="clear"
+                id="mod-clear" hidden>Clear</button>
+        <button class="btn btn-outline-secondary" data-mod-action="search">Search</button>
+      </div>
+      <div id="mod-results" class="row g-2 mt-2"></div>
+      <div id="mod-pager" class="d-flex justify-content-between align-items-center mt-2" hidden>
+        <button class="btn btn-outline-secondary btn-sm" data-mod-action="prev">&laquo; Previous</button>
+        <span id="mod-pager-info" class="small text-secondary"></span>
+        <button class="btn btn-outline-secondary btn-sm" data-mod-action="next">Next &raquo;</button>
+      </div>
+    {% else %}
+      <p class="mb-0 text-secondary">
+        Searching needs a Steam Web API key. Set <code>STEAM_API_KEY</code> in
+        <code>.env</code> (get one at
+        <code>steamcommunity.com/dev/apikey</code>) and recreate the container.
+        Steam offers no keyless search endpoint - installing by ID or URL works
+        without it.
+      </p>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- job output ---- #}
+<div class="card mb-3" id="mod-job" hidden>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><span id="mod-job-title">Job</span> <span id="mod-job-state" class="badge text-bg-secondary"></span></span>
+    <button class="btn btn-outline-danger btn-sm" data-mod-action="cancel" hidden>Cancel</button>
+  </div>
+  <div class="card-body">
+    <div id="mod-job-detail" class="text-secondary small mb-2"></div>
+    {# job-output, not a class of its own: without one the box had no height
+       limit at all and a long SteamCMD run pushed the mod list off the page. #}
+    <pre id="mod-job-output" class="job-output mb-0"></pre>
+    <div id="mod-job-error" class="alert alert-danger mt-2 mb-0" hidden></div>
+  </div>
+</div>
+
+{# ---- installed mods ---- #}
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Installed mods</span>
+    <span class="text-secondary small">Load order is the command line order</span>
+  </div>
+
+  {% if mods %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th style="width:3rem"></th>
+            <th>Mod</th>
+            <th style="width:11rem">Type</th>
+            <th style="width:6rem">Size</th>
+            <th style="width:9rem">Updated</th>
+            <th style="width:15rem"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for mod in mods %}
+            <tr data-mod-id="{{ mod.workshop_id }}">
+              <td class="text-nowrap">
+                <div class="btn-group-vertical btn-group-sm">
+                  <button class="btn btn-outline-secondary py-0" data-mod-action="up" title="Load earlier">&#9650;</button>
+                  <button class="btn btn-outline-secondary py-0" data-mod-action="down" title="Load later">&#9660;</button>
+                </div>
+              </td>
+              <td>
+                <div class="form-check form-switch d-inline-block me-2 align-middle">
+                  <input class="form-check-input" type="checkbox" role="switch"
+                         data-mod-action="enabled" {% if mod.enabled %}checked{% endif %}
+                         title="Include in the launch parameters">
+                </div>
+                <strong>{{ mod.name }}</strong>
+                {% if not mod.installed %}
+                  <span class="badge text-bg-danger ms-1">files missing</span>
+                {% endif %}
+                {% if mod.key_files %}
+                  <span class="badge text-bg-secondary ms-1" title="{{ mod.key_files|join(', ') }}">
+                    {{ mod.key_files|length }} key{{ '' if mod.key_files|length == 1 else 's' }}
+                  </span>
+                {% endif %}
+                <br>
+                <small class="text-secondary">
+                  <code>{{ mod.dir_name }}</code> &middot; ID {{ mod.workshop_id }}
+                </small>
+              </td>
+              <td>
+                <select class="form-select form-select-sm" data-mod-action="type">
+                  <option value="client" {% if mod.mod_type == 'client' %}selected{% endif %}>Client (-mod)</option>
+                  <option value="server" {% if mod.mod_type == 'server' %}selected{% endif %}>Server (-serverMod)</option>
+                </select>
+              </td>
+              <td class="text-nowrap">{{ '%.1f'|format(mod.size_mb) }} MB</td>
+              <td class="text-nowrap small text-secondary">
+                {% if mod.updated_at %}{{ mod.updated_at | timestamp }}{% else %}-{% endif %}
+              </td>
+              <td class="text-end text-nowrap">
+                <button class="btn btn-outline-primary btn-sm" data-mod-action="update">Update</button>
+                <button class="btn btn-outline-secondary btn-sm" data-mod-action="reinstall">Reinstall</button>
+                <button class="btn btn-outline-danger btn-sm" data-mod-action="delete">Delete</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card-body text-secondary">
+      No mods installed. Add one by workshop ID above.
+    </div>
+  {% endif %}
+
+  <div class="card-footer text-secondary small">
+    Changes to mods take effect when the server next starts.
+    {% if server_running %}
+      The server is running right now, so the panel asks before touching files it has open.
+    {% endif %}
+  </div>
+</div>
+
+{% if orphans %}
+  <div class="alert alert-warning mt-3">
+    <strong>Unknown mod directories in <code>data/server/</code>:</strong>
+    {{ orphans|join(', ') }}.<br>
+    The panel did not install these and leaves them alone - they are not on the
+    command line. Delete them by hand if they are leftovers.
+  </div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/mods.js') }}"
+        data-csrf="{{ csrf_token() }}"
+        data-active-url="{{ url_for('jobs.active_json') }}"
+        data-kinds="{{ job_kinds }}"></script>
+{% endblock %}

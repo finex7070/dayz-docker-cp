@@ -1,0 +1,32 @@
+services:
+  dayz:
+    build:
+      context: .
+      args:                     # must match PUID/PGID in .env
+        STEAM_UID: ${PUID:-1000}
+        STEAM_GID: ${PGID:-1000}
+    # Published by the GitHub Action on every push to main. `docker compose
+    # pull` fetches it; `docker compose build` overwrites it with a local
+    # build under the same name.
+    image: ghcr.io/finex7070/dayz-docker-cp:latest
+    container_name: dayz
+
+    env_file:
+      - .env
+
+    ports:
+      - "${PANEL_PORT:-8080}:${PANEL_PORT:-8080}/tcp"                # panel (HTTP)
+      - "2302-2304:2302-2304/udp"                                    # game
+      - "${RCON_PORT:-2305}:${RCON_PORT:-2305}/udp"                  # BattlEye RCON
+      - "${STEAM_QUERY_PORT:-27016}:${STEAM_QUERY_PORT:-27016}/udp"  # Steam query
+      - "8766:8766/udp"                                              # Steam master, fixed
+
+    volumes:
+      - ./data:/data            # or a named volume: dayz-data:/data
+
+    stop_grace_period: 60s      # the panel shuts the server down first
+    restart: unless-stopped
+    tty: true                   # SteamCMD buffers its progress output otherwise
+
+# volumes:
+#   dayz-data:

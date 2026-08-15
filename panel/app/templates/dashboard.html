@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block heading %}Dashboard{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"
+        data-active-url="{{ url_for('jobs.active_json') }}"
+        data-install-url="{{ url_for('jobs.install') }}"
+        data-update-url="{{ url_for('jobs.update') }}"
+        data-csrf="{{ csrf_token() }}"
+        data-initial-cursor="{{ job.next_index if job else 0 }}"
+        data-initial-id="{{ job.id if job else '' }}"
+        data-kinds="{{ job_kinds }}"></script>
+<script src="{{ url_for('static', filename='js/live.js') }}"
+        data-status-url="{{ url_for('dashboard.status_json') }}"></script>
+<script src="{{ url_for('static', filename='js/console.js') }}"
+        data-stream-url="{{ url_for('console.stream') }}"
+        data-send-url="{{ url_for('console.send') }}"
+        data-status-url="{{ url_for('server.status_json') }}"
+        data-csrf="{{ csrf_token() }}"></script>
+{% endblock %}
+
+{% block content %}
+
+{# ---- Server files ---- #}
+<div class="card setup-card mb-4" id="steamcmd-card">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+      <div>
+        <h2 class="h5 mb-1">
+          {% if settings.server_installed %}Server files{% else %}Server files are not installed yet{% endif %}
+        </h2>
+        <p class="text-secondary mb-0" id="job-detail">
+          {% if not settings.steam_credentials_set %}
+            Steam credentials are missing.
+          {% elif settings.server_installed %}
+            {# Two dates, not one: an update that downloads nothing leaves the
+               Steam manifest untouched, so "updated" alone could read as weeks
+               out of date while the files were confirmed current this morning. #}
+            Updated {{ files.last_updated_text }}{% if files.build_id %}
+              (build {{ files.build_id }}){% endif %},
+            last checked {{ files.last_checked_text }}.
+          {% else %}
+            SteamCMD is ready. Downloading app {{ settings.SERVER_APP_ID }} takes a while.
+          {% endif %}
+        </p>
+      </div>
+
+      <div class="d-flex gap-2" id="job-actions">
+        {% if settings.steam_credentials_set %}
+          <button class="btn btn-primary" data-job-action="install"
+                  {% if settings.server_installed %}hidden{% endif %}>Install server files</button>
+          <button class="btn btn-outline-secondary" data-job-action="update"
+                  {% if not settings.server_installed %}hidden{% endif %}>Update server files</button>
+          <button class="btn btn-outline-danger" data-job-action="cancel" hidden>Cancel</button>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if not settings.steam_credentials_set %}
+      <div class="alert alert-warning mt-3 mb-0">
+        <strong>Steam credentials missing.</strong>
+        Set <code>STEAM_USERNAME</code> and <code>STEAM_PASSWORD</code> in your
+        <code>.env</code> file - the DayZ server cannot be downloaded anonymously.
+      </div>
+    {% endif %}
+
+    <form class="guard-box mt-3" id="guard-form" hidden>
+      <label class="form-label" for="guard-code">
+        <strong>Steam Guard code required</strong>
+        <br><small class="text-secondary" id="guard-prompt"></small>
+      </label>
+      <div class="input-group">
+        <input class="form-control" id="guard-code" name="code" autocomplete="one-time-code"
+               inputmode="text" spellcheck="false" maxlength="16" placeholder="e.g. K4B7X">
+        <button class="btn btn-primary" type="submit">Submit code</button>
+      </div>
+      <div class="form-text">
+        The code is sent straight to the running SteamCMD process and is never stored.
+      </div>
+    </form>
+
+    <div id="job-output-wrap" class="mt-3" {% if not job %}hidden{% endif %}>
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="text-secondary small" id="job-title">{{ job.title if job }}</span>
+        <span class="badge text-bg-secondary" id="job-state">{{ job.state if job }}</span>
+      </div>
+      <pre class="job-output" id="job-output">{% if job %}{{ job.lines | join('\n') }}{% endif %}</pre>
+      <div class="alert alert-danger mt-2 mb-0" id="job-error"
+           {% if not job or not job.error %}hidden{% endif %}>{{ job.error if job }}</div>
+    </div>
+  </div>
+</div>
+
+{# ---- Status ---- #}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="stat-label">Server state</div>
+      <div class="stat-value" data-live="server_state"
+           data-live-class="server_state_class">{{ live.server_state }}</div>
+      <div class="stat-note" data-live="server_note">{{ live.server_note }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="stat-label">Server uptime</div>
+      <div class="stat-value" data-live="server_uptime_seconds"
+           data-live-format="duration">{{ live.server_uptime_seconds | duration }}</div>
+      <div class="stat-note" data-live="server_started_note">{{ live.server_started_note }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="stat-label">Players</div>
+      <div class="stat-value" data-live="server_players">{{ live.server_players }}</div>
+      <div class="stat-note" data-live="server_players_note">{{ live.server_players_note }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="stat-label">CPU</div>
+      <div class="stat-value" data-live="server_cpu">{{ live.server_cpu }}</div>
+      <div class="stat-note" data-live="server_cpu_note">{{ live.server_cpu_note }}</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card h-100"><div class="card-body">
+      <div class="stat-label">Memory</div>
+      <div class="stat-value" data-live="server_memory">{{ live.server_memory }}</div>
+      <div class="stat-note" data-live="server_memory_note">{{ live.server_memory_note }}</div>
+    </div></div>
+  </div>
+</div>
+
+{# ---- Controls ---- #}
+<div class="card mb-4">
+  <div class="card-body d-flex flex-wrap gap-2 align-items-center" id="server-actions">
+    <button class="btn btn-success" data-server-action="start"
+            {% if not status.can_start %}disabled{% endif %}>Start</button>
+    <button class="btn btn-outline-secondary" data-server-action="restart"
+            {% if not status.can_stop %}disabled{% endif %}>Restart</button>
+    <button class="btn btn-outline-danger" data-server-action="stop"
+            {% if not status.can_stop %}disabled{% endif %}>Stop</button>
+
+    <span class="vr mx-2 d-none d-sm-inline"></span>
+
+    {# Locking goes over RCON, so both buttons follow the RCON session rather
+       than the server state - a running server without RCON cannot do this. #}
+    <button class="btn btn-outline-warning" data-server-action="lock"
+            {% if not status.rcon.connected %}disabled{% endif %}>Lock</button>
+    <button class="btn btn-outline-warning" data-server-action="unlock"
+            {% if not status.rcon.connected %}disabled{% endif %}>Unlock</button>
+
+    <span class="vr mx-2 d-none d-sm-inline"></span>
+
+    {# Backing up is neither process control nor RCON, so it follows neither:
+       it needs the job slot, which a SteamCMD run may be holding. #}
+    <button class="btn btn-outline-secondary" data-server-action="backup"
+            data-url="{{ url_for('backups.run') }}"
+            {% if status.job_busy %}disabled{% endif %}>Backup</button>
+
+    {# The address players connect to. It cannot be derived - the panel sees the
+       container's private address, so it comes from SERVER_REAL_IP. #}
+    <span class="ms-auto d-flex align-items-center gap-2">
+      {% if settings.server_address %}
+        <code class="server-address">{{ settings.server_address }}</code>
+        <button class="btn btn-outline-secondary btn-sm"
+                data-copy="{{ settings.server_address }}">Copy</button>
+      {% else %}
+        <span class="small text-secondary"
+              title="Set SERVER_REAL_IP in .env to show the address players connect to.">
+          Port {{ settings.server_port }}
+        </span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body pt-0">
+    <div class="alert alert-warning mb-0" id="server-blocked"
+         {% if not status.blocked_reason %}hidden{% endif %}>{{ status.blocked_reason }}</div>
+    <div class="alert alert-danger mb-0 mt-2" id="server-error"
+         {% if not status.error %}hidden{% endif %}>{{ status.error }}</div>
+  </div>
+</div>
+
+{# ---- Live console ---- #}
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Live console</span>
+    <span class="small text-secondary">
+      <span class="status-dot status-dot-inline" id="console-dot"></span>
+      <span id="console-status">idle</span>
+    </span>
+  </div>
+  <div class="card-body">
+    <pre class="job-output log-output" id="console-output"></pre>
+
+    <form class="input-group mt-3" id="console-form">
+      <input class="form-control" id="console-input" spellcheck="false" autocomplete="off"
+             placeholder="RCON command, e.g. players"
+             {% if not status.rcon.connected %}disabled{% endif %}>
+      <button class="btn btn-primary" type="submit" id="console-send"
+              {% if not status.rcon.connected %}disabled{% endif %}>Send</button>
+    </form>
+    {# The RCON state belongs to the input, not to the buttons above: it is
+       what decides whether typing here does anything. #}
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+      <div class="form-text" id="console-hint">
+        BattlEye commands, e.g. <code>players</code>, <code>say -1 &lt;text&gt;</code>,
+        <code>kick &lt;id&gt;</code>. Press &uarr; for earlier commands.
+      </div>
+      <span class="form-text text-nowrap">
+        <span class="status-dot status-dot-inline" id="rcon-dot"></span>
+        <span id="rcon-status">RCON</span>
+      </span>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

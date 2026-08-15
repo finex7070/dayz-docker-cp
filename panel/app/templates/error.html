@@ -1,0 +1,20 @@
+{# Error page. Standalone, because errors can occur before or after sign-in and
+   base.html assumes an authenticated user for the sidebar. #}
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ code }} &middot; DayZ Control Panel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+</head>
+<body class="login-page">
+<main class="login-card text-center">
+  <div class="error-code">{{ code }}</div>
+  <p class="mb-4">{{ message }}</p>
+  <a class="btn btn-outline-secondary" href="{{ url_for('dashboard.index') }}">Back to the dashboard</a>
+</main>
+</body>
+</html>

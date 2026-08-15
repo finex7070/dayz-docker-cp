@@ -1,0 +1,10 @@
+# Shell scripts and the entrypoint MUST use LF line endings.
+# With CRLF the container fails to start with a misleading message such as
+# "/usr/bin/env: 'bash\r': No such file or directory".
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.cfg       text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+.env.example text eol=lf

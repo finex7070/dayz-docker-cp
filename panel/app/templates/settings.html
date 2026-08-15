@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block heading %}Settings{% endblock %}
+
+{% macro switch(name, label, checked=False, help='') %}
+  <div class="form-check form-switch mb-2">
+    <input class="form-check-input" type="checkbox" role="switch"
+           id="sw-{{ name }}" name="{{ name }}" {% if checked %}checked{% endif %}>
+    <label class="form-check-label" for="sw-{{ name }}">
+      {{ label }}
+      {% if help %}<small class="text-secondary d-block">{{ help }}</small>{% endif %}
+    </label>
+  </div>
+{% endmacro %}
+
+{% block content %}
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  {% for id, label in [('general', 'General'), ('serverdz', 'serverDZ')] %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link{{ ' active' if tab == id }}" data-bs-toggle="tab"
+              data-bs-target="#tab-{{ id }}" type="button" role="tab">{{ label }}</button>
+    </li>
+  {% endfor %}
+</ul>
+
+<div class="tab-content">
+
+  {# ---- General: launch parameters ---- #}
+  <div class="tab-pane fade{{ ' show active' if tab == 'general' }}" id="tab-general" role="tabpanel">
+    <form method="post" action="{{ url_for('settings.save_general') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="settings-grid">
+        <div class="card">
+            <div class="card-header">Mission</div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label" for="mission">Mission</label>
+                <select class="form-select" id="mission" name="mission" required>
+                  {% for name in missions %}
+                    <option value="{{ name }}" {% if name == current.mission %}selected{% endif %}>{{ name }}</option>
+                  {% endfor %}
+                  {# The stored mission may not be on disk - after a mod was
+                     removed, or before the server files are installed. Keeping
+                     it as an option stops a save from silently switching the
+                     map to whatever happens to be first. #}
+                  {% if current.mission and current.mission not in missions %}
+                    <option value="{{ current.mission }}" selected>{{ current.mission }} - not found in mpmissions/</option>
+                  {% endif %}
+                </select>
+                <div class="form-text">
+                  {% if missions %}The folders in <code>server/mpmissions/</code>.
+                  Written into <code>class Missions</code> in serverDZ.cfg on every start.
+                  {% else %}Nothing in <code>server/mpmissions/</code> yet - install the server files first.{% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">Performance</div>
+            <div class="card-body">
+              <div class="row g-3">
+                <div class="col-sm-6">
+                  <label class="form-label" for="cpu_count">CPU count</label>
+                  <input class="form-control" type="number" id="cpu_count" name="cpu_count"
+                         min="1" max="{{ max_cpu }}" value="{{ current.cpu_count }}" required>
+                  <div class="form-text">
+                    -cpuCount and <code>maxcores</code> in dayzsetting.xml,
+                    at most {{ max_cpu }} here.
+                  </div>
+                </div>
+                <div class="col-sm-6">
+                  <label class="form-label" for="limit_fps">FPS limit</label>
+                  <input class="form-control" type="number" id="limit_fps" name="limit_fps"
+                         min="1" max="200" placeholder="no limit"
+                         value="{{ current.limit_fps or '' }}">
+                  <div class="form-text">Empty leaves -limitFPS out entirely.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">Logging</div>
+            <div class="card-body">
+              {{ switch('do_logs', 'Server logs (-doLogs)', current.do_logs, 'Error logs and crash dumps in profiles/, alongside the .RPT report.') }}
+              {{ switch('admin_log', 'Admin log (-adminLog)', current.admin_log, 'Connects, deaths and positions in the .ADM file.') }}
+              {{ switch('net_log', 'Network log (-netLog)', current.net_log, 'Traffic in a .net.log. Large - turn on only to diagnose desync.') }}
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">Behaviour</div>
+            <div class="card-body">
+              {{ switch('auto_restart', 'Restart after a crash', current.auto_restart, 'Starts the server again if it exits on its own: after 5s, 15s and 60s, then gives up.') }}
+              {{ switch('freeze_check', 'Freeze check (-freezeCheck)', current.freeze_check, 'Ends a frozen server after five minutes and writes a dump.') }}
+              {{ switch('file_patching', 'File patching (-filePatching)', current.file_patching, 'Loads unpacked files instead of PBOs only. For mod development.') }}
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">Update</div>
+            <div class="card-body">
+              {{ switch('auto_update', 'Update server files on start', current.auto_update, 'SteamCMD app_update before every start you trigger - adds to how long the start takes.') }}
+              {{ switch('auto_mod_update', 'Update mods on start', current.auto_mod_update, 'Updates every installed mod, after the server files and before the server comes up.') }}
+              <div class="form-text mt-2">
+                Both run on Start and Restart, never before a crash restart - the
+                point of that one is to be back quickly. An update that fails
+                stops the start rather than running the server on half-written
+                files.
+              </div>
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">BattlEye</div>
+            <div class="card-body">
+              <label class="form-label" for="rcon_password">RCON password</label>
+              <div class="input-group">
+                <input class="form-control" type="password" id="rcon_password"
+                       name="rcon_password" autocomplete="new-password"
+                       value="{{ current.rcon_password }}">
+                <button class="btn btn-outline-secondary" type="button"
+                        data-toggle-password="#rcon_password">Show</button>
+              </div>
+              <small class="text-secondary d-block mt-1 mb-3">
+                Written to beserver_x64.cfg before every start. Empty disables RCON.
+              </small>
+
+              {{ switch('rcon_restrict', 'Restrict RCON (RestrictRCon)', current.rcon_restrict, 'Governs the RCon kick, ban and connection-restricting functions. On writes RestrictRCon 1.') }}
+            </div>
+          </div>
+
+        <div class="card">
+            <div class="card-header">Mods</div>
+            <div class="card-body">
+              <p class="text-secondary small">
+                Maintained on the <a href="{{ url_for('mods.index') }}">Mods page</a>,
+                counted here so the command line is visible in one place.
+              </p>
+              <dl class="row mb-0 small">
+                {# Counts, not names: a dozen mod folders would push this card
+                   wider than the column and squash everything beside it. The
+                   full list is one hover away. #}
+                <dt class="col-sm-4">-mod</dt>
+                <dd class="col-sm-8" title="{{ mod_summary.client|join(', ') or 'none' }}">
+                  {% if mod_summary.client %}{{ mod_summary.client|length }}
+                    client mod{{ '' if mod_summary.client|length == 1 else 's' }}
+                  {% else %}<span class="text-secondary">none</span>{% endif %}
+                </dd>
+                <dt class="col-sm-4">-serverMod</dt>
+                <dd class="col-sm-8" title="{{ mod_summary.server|join(', ') or 'none' }}">
+                  {% if mod_summary.server %}{{ mod_summary.server|length }}
+                    server mod{{ '' if mod_summary.server|length == 1 else 's' }}
+                  {% else %}<span class="text-secondary">none</span>{% endif %}
+                </dd>
+              </dl>
+            </div>
+          </div>
+
+      </div>
+
+      <div class="mt-3 d-flex gap-2 align-items-center">
+        <button class="btn btn-primary" type="submit">Save launch parameters</button>
+        <span class="text-secondary small">Takes effect on the next server start.</span>
+      </div>
+    </form>
+  </div>
+
+  {# ---- serverDZ.cfg ---- #}
+  <div class="tab-pane fade{{ ' show active' if tab == 'serverdz' }}" id="tab-serverdz" role="tabpanel">
+    {% if not cfg_exists %}
+      <div class="alert alert-warning">
+        <code>serverDZ.cfg</code> does not exist yet. Install the server files first.
+      </div>
+    {% else %}
+      <form method="post" action="{{ url_for('settings.save_serverdz') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {# Names every field below, so an unticked switch reads as 0 rather
+           than as "not submitted". #}
+        <input type="hidden" name="{{ cfg_form_key }}" value="{{ cfg_all_keys }}">
+
+        <div class="alert alert-secondary">
+          Only the fields below are rewritten and anything added by hand stays
+          as it is.
+        </div>
+
+        <div class="settings-grid">
+          {% for section in cfg_sections %}
+              <div class="card">
+                <div class="card-header">{{ section.name }}</div>
+                <div class="card-body">
+                  {% for entry in section.fields %}
+                    {% set f = entry.field %}
+                    {% if f.is_switch %}
+                      {# 0/1 for most keys, false/true for the two list toggles #}
+                      {{ switch(f.key, f.label, entry.value|lower in ['1', 'true'], f.help) }}
+                    {% elif f.kind == 'choice' %}
+                      <div class="mb-3">
+                        <label class="form-label" for="f-{{ f.key }}">{{ f.label }}</label>
+                        <select class="form-select" id="f-{{ f.key }}" name="{{ f.key }}">
+                          {% for value, label in f.choices %}
+                            <option value="{{ value }}" {% if entry.value == value %}selected{% endif %}>{{ label }}</option>
+                          {% endfor %}
+                        </select>
+                        {% if f.help %}<div class="form-text">{{ f.help }}</div>{% endif %}
+                      </div>
+                    {% else %}
+                      <div class="mb-3">
+                        <label class="form-label" for="f-{{ f.key }}">{{ f.label }}</label>
+                        {% if f.kind == 'password' %}
+                          <div class="input-group">
+                            <input class="form-control" type="password" id="f-{{ f.key }}"
+                                   name="{{ f.key }}" value="{{ entry.value }}"
+                                   autocomplete="new-password">
+                            <button class="btn btn-outline-secondary" type="button"
+                                    data-toggle-password="#f-{{ f.key }}">Show</button>
+                          </div>
+                        {% else %}
+                          <input class="form-control"
+                                 type="{{ 'number' if f.kind in ('int', 'float') else 'text' }}"
+                                 {% if f.kind == 'float' %}step="0.1"{% endif %}
+                                 {% if f.minimum is not none %}min="{{ f.minimum }}"{% endif %}
+                                 {% if f.maximum is not none %}max="{{ f.maximum }}"{% endif %}
+                                 {% if f.max_length is not none %}maxlength="{{ f.max_length }}"{% endif %}
+                                 id="f-{{ f.key }}" name="{{ f.key }}" value="{{ entry.value }}">
+                        {% endif %}
+                        <div class="form-text">{{ f.help }}</div>
+                      </div>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              </div>
+          {% endfor %}
+        </div>
+
+        <div class="mt-3 d-flex gap-2 align-items-center">
+          <button class="btn btn-primary" type="submit">Save serverDZ.cfg</button>
+          <span class="text-secondary small">Takes effect on the next server start.</span>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+{% endblock %}

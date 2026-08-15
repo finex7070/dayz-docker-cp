@@ -1,0 +1,59 @@
+{# Standalone page - deliberately does not extend base.html, which assumes a
+   signed-in user for the sidebar. #}
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in &middot; DayZ Control Panel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+</head>
+<body class="login-page">
+
+<main class="login-card">
+  <div class="login-brand">
+    <span class="brand-mark">DZ</span>
+    <h1>DayZ Control Panel</h1>
+    <p>Sign in to manage the server.</p>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="post" novalidate>
+    {{ form.csrf_token }}
+
+    <div class="mb-3">
+      <label class="form-label" for="username">Username</label>
+      {{ form.username(class="form-control", id="username", autocomplete="username",
+                       autofocus=true, required=true) }}
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label" for="password">Password</label>
+      {{ form.password(class="form-control", id="password",
+                       autocomplete="current-password", required=true) }}
+    </div>
+
+    <div class="form-check mb-4">
+      {{ form.remember(class="form-check-input", id="remember") }}
+      <label class="form-check-label" for="remember">{{ form.remember.label.text }}</label>
+    </div>
+
+    <button class="btn btn-primary w-100" type="submit">Sign in</button>
+  </form>
+
+  <p class="login-foot">
+    Credentials come from <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code>
+    in the container environment.
+  </p>
+</main>
+
+<script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+</body>
+</html>

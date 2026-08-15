@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block heading %}Backups{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/backups.js') }}"
+        data-run-url="{{ url_for('backups.run') }}"
+        data-retention-url="{{ url_for('backups.retention') }}"
+        data-active-url="{{ url_for('jobs.active_json') }}"
+        data-kinds="{{ job_kinds }}"
+        data-csrf="{{ csrf_token() }}"></script>
+{% endblock %}
+
+{% block content %}
+
+{% if not available %}
+  <div class="alert alert-warning">
+    <strong>restic is not installed in this image.</strong>
+    The backup engine comes with the container image - rebuild it
+    (<code>docker compose build</code>) to use this page.
+  </div>
+{% endif %}
+
+{% if error %}
+  {# A repository that cannot be read is exactly what one comes to this page
+     to find out, so it says so here instead of failing the request. #}
+  <div class="alert alert-danger">
+    <strong>The backup repository could not be read.</strong>
+    <div class="small mt-1 font-monospace">{{ error }}</div>
+  </div>
+{% endif %}
+
+{# ---- repository ---- #}
+<div class="card mb-3">
+  <div class="card-body d-flex flex-wrap gap-4 align-items-center">
+    <div>
+      <div class="stat-label">Repository</div>
+      <div class="stat-value" id="repo-size">{{ stats.size | filesize }}</div>
+      <div class="stat-note">of <code>server/</code></div>
+    </div>
+    <div>
+      <div class="stat-label">Snapshots</div>
+      <div class="stat-value" id="repo-count">{{ stats.count }}</div>
+      <div class="stat-note">kept in the repository</div>
+    </div>
+    <div>
+      <div class="stat-label">Free space</div>
+      <div class="stat-value" id="repo-free">{{ stats.free | filesize }}</div>
+      <div class="stat-note">on the data volume</div>
+    </div>
+
+    <div class="ms-auto">
+      <button class="btn btn-primary" data-backup-action="run"
+              {% if not available %}disabled{% endif %}>Back up now</button>
+    </div>
+  </div>
+</div>
+
+{# ---- retention ---- #}
+<div class="card mb-3">
+  <div class="card-header">Retention and exclusions</div>
+  <form class="card-body" method="post" action="{{ url_for('backups.save_settings') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="row g-3">
+      <div class="col-sm-3">
+        <label class="form-label" for="keep_last">Keep last</label>
+        <input class="form-control" type="number" id="keep_last" name="keep_last"
+               min="1" max="999" placeholder="all"
+               value="{{ current.keep_last or '' }}">
+        <div class="form-text">Snapshots. Empty keeps every one.</div>
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label" for="keep_days">Delete after</label>
+        <div class="input-group">
+          <input class="form-control" type="number" id="keep_days" name="keep_days"
+                 min="1" max="3650" placeholder="never"
+                 value="{{ current.keep_days or '' }}">
+          <span class="input-group-text">days</span>
+        </div>
+        <div class="form-text">Empty keeps them forever.</div>
+      </div>
+      <div class="col-sm-6">
+        <label class="form-label" for="excludes">Exclude from backups</label>
+        <textarea class="form-control font-monospace" id="excludes" name="excludes"
+                  rows="3" spellcheck="false"
+                  placeholder="addons&#10;dta">{{ current.excludes | join('\n') }}</textarea>
+        <div class="form-text">
+          One path per line, relative to <code>server/</code>.
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-3">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <button class="btn btn-outline-secondary" type="button"
+              data-backup-action="retention"
+              {% if not current.has_retention %}disabled{% endif %}>Apply retention now</button>
+    </div>
+  </form>
+</div>
+
+{# ---- job output ---- #}
+<div class="card mb-3" id="backup-job" hidden>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><span id="backup-job-title">Job</span>
+      <span id="backup-job-state" class="badge text-bg-secondary"></span></span>
+  </div>
+  <div class="card-body">
+    <div id="backup-job-detail" class="text-secondary small mb-2"></div>
+    <pre id="backup-job-output" class="job-output mb-0"></pre>
+    <div id="backup-job-error" class="alert alert-danger mt-2 mb-0" hidden></div>
+  </div>
+</div>
+
+{# ---- snapshots ---- #}
+<div class="card mb-3">
+  <div class="card-header">Snapshots</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0" id="snapshot-table">
+      <thead>
+        <tr>
+          <th>Taken</th>
+          <th>Tags</th>
+          <th class="text-end">State</th>
+          <th class="text-end">Stored</th>
+          <th class="text-end">Files</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for snap in snapshots %}
+          <tr data-snapshot="{{ snap.id }}">
+            <td class="text-nowrap">
+              {{ snap.time | timestamp }}
+              <br><small class="text-secondary font-monospace">{{ snap.short_id }}</small>
+            </td>
+            <td>
+              {% for tag in snap.tags %}
+                <span class="badge {{ 'text-bg-warning' if tag == 'hot' else 'text-bg-secondary' }}"
+                      {% if tag == 'hot' %}title="Taken while the server was running - persistence may have been written during the snapshot."{% endif %}>{{ tag }}</span>
+              {% endfor %}
+            </td>
+            <td class="text-end text-nowrap">{{ snap.size | filesize }}</td>
+            <td class="text-end text-nowrap">{{ snap.added | filesize }}</td>
+            <td class="text-end text-nowrap text-secondary">{{ snap.files or '-' }}</td>
+            {# The partial downloads are plain links rather than a dropdown:
+               this table scrolls sideways on narrow screens, and an overflow
+               container clips a Bootstrap menu that opens downwards out of it.
+               As links they also stop being hidden behind an arrow. #}
+            <td class="text-end text-nowrap">
+              <div class="btn-group btn-group-sm">
+                <a class="btn btn-outline-secondary"
+                   href="{{ url_for('backups.download', snapshot_id=snap.id) }}">Download</a>
+                <button class="btn btn-outline-primary"
+                        data-backup-action="restore">Restore</button>
+                <button class="btn btn-outline-danger"
+                        data-backup-action="delete">Delete</button>
+              </div>
+              <div class="small text-secondary mt-1">
+                or only
+                <a href="{{ url_for('backups.download', snapshot_id=snap.id, path='mpmissions') }}"
+                   title="Map and persistence">mpmissions</a> &middot;
+                <a href="{{ url_for('backups.download', snapshot_id=snap.id, path='profiles') }}"
+                   title="Server logs">profiles</a>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="6" class="text-secondary">
+              {% if available %}No snapshots yet. <em>Back up now</em> makes the first one.
+              {% else %}The backup engine is missing - see above.{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer text-secondary small">
+    <strong>State</strong> is how large the server directory was.
+    <strong>Stored</strong> is what the snapshot added to the repository -
+    only the blocks that changed, which is why the tenth backup costs a
+    fraction of the first.
+  </div>
+</div>
+
+{# ---- confirmations ---- #}
+<div class="modal fade" id="backup-dialog" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" id="backup-dialog-form">
+      <div class="modal-header">
+        <h5 class="modal-title" id="backup-dialog-title">...</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="backup-dialog-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="backup-dialog-ok">OK</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

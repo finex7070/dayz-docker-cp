@@ -1,0 +1,33 @@
+# Runtime data (server files, mods, logs) never belongs in the build context
+data/
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Git / docs / editor
+.git/
+.gitignore
+.gitattributes
+*.md
+!defaults/*.md
+.vscode/
+.idea/
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

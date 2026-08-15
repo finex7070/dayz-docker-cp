@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block heading %}Files{% endblock %}
+
+{% block scripts %}
+<script id="file-data" type="application/json">{{ listing | tojson }}</script>
+<script src="{{ url_for('static', filename='js/files.js') }}"
+        data-list-url="{{ url_for('files.list_json') }}"
+        data-read-url="{{ url_for('files.read_json') }}"
+        data-save-url="{{ url_for('files.save') }}"
+        data-upload-url="{{ url_for('files.upload') }}"
+        data-mkdir-url="{{ url_for('files.mkdir') }}"
+        data-delete-url="{{ url_for('files.delete') }}"
+        data-download-url="{{ url_for('files.download') }}"
+        data-rename-url="{{ url_for('files.rename') }}"
+        data-move-url="{{ url_for('files.move') }}"
+        data-bulk-delete-url="{{ url_for('files.bulk_delete') }}"
+        data-create-url="{{ url_for('files.create') }}"
+        data-max-upload-mb="{{ max_upload_mb }}"
+        data-csrf="{{ csrf_token() }}"></script>
+{% endblock %}
+
+{% block content %}
+
+<div class="alert alert-danger" id="file-error" hidden></div>
+<div class="alert alert-success" id="file-note" hidden></div>
+
+{# ---- browser ---- #}
+<div class="card" id="file-browser">
+  {# Breadcrumb and actions share one row: where you are and what you can do
+     there belong together, and the header is the only place both fit without
+     a second bar pushing the listing down. #}
+  <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+    <nav aria-label="breadcrumb" class="me-auto">
+      <ol class="breadcrumb mb-0 small" id="file-crumbs"></ol>
+    </nav>
+
+    <span class="small text-secondary me-2" id="file-selection" hidden></span>
+    {# Only shown with a selection: bulk buttons that do nothing are worse than
+       absent ones, because they invite the click that explains nothing. #}
+    <button class="btn btn-outline-secondary btn-sm" data-file-action="bulk-move" hidden>
+      Move selected
+    </button>
+    <button class="btn btn-outline-danger btn-sm" data-file-action="bulk-delete" hidden>
+      Delete selected
+    </button>
+
+    <button class="btn btn-outline-secondary btn-sm" data-file-action="create">New file</button>
+    <button class="btn btn-outline-secondary btn-sm" data-file-action="mkdir">New folder</button>
+    <button class="btn btn-primary btn-sm" data-file-action="pick">Upload</button>
+    <input type="file" id="file-input" multiple hidden>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 file-table">
+      <thead>
+        <tr>
+          <th class="file-select">
+            <input class="form-check-input mt-0" type="checkbox" id="file-select-all"
+                   title="Select everything in this directory">
+          </th>
+          <th>Name</th>
+          <th class="text-end">Size</th>
+          <th class="text-end">Modified</th>
+          <th class="file-menu-col"></th>
+        </tr>
+      </thead>
+      <tbody id="file-rows"></tbody>
+    </table>
+  </div>
+  <div class="card-footer small text-secondary d-flex justify-content-between gap-3 flex-wrap">
+    <span id="file-count"></span>
+    {# Belongs to the browser, not to the page: in the editor there is nothing
+       to upload, and a limit stated there only raises the question of what it
+       applies to. #}
+    {# The binary rule is not stated here: trying to open one says so, with the
+       file in hand, which is the moment it means anything. #}
+    <span>Uploads are limited to {{ max_upload_mb }} MB per request.</span>
+  </div>
+</div>
+
+{# ---- editor ---- #}
+<div class="card" id="file-editor" hidden>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span id="editor-path" class="font-monospace small"></span>
+    <span class="small text-secondary" id="editor-state"></span>
+  </div>
+  <div class="card-body">
+    <textarea class="form-control font-monospace" id="editor-text" rows="26"
+              spellcheck="false" wrap="off"></textarea>
+    {# Two ways out, both of them complete. Saving and closing as separate
+       steps made leaving a two-part act, and the second part looked optional. #}
+    <div class="d-flex gap-2 mt-3 align-items-center">
+      <button class="btn btn-primary" data-file-action="save-close">Save and close</button>
+      {# Just "Close": with unsaved changes it asks first, and a label that
+         says "Discard" made leaving an untouched file look destructive. #}
+      <button class="btn btn-outline-secondary" data-file-action="close">Close</button>
+      {# Next to the buttons rather than under them: it names the third way out,
+         and belongs where the other two are. #}
+      <span class="form-text ms-2 mb-0">
+        <kbd>Ctrl</kbd>+<kbd>S</kbd> saves without leaving.
+      </span>
+      <a class="btn btn-outline-secondary ms-auto" id="editor-download" download>Download</a>
+    </div>
+  </div>
+</div>
+
+{# One dialog for every question this page asks. Not window.prompt: browsers
+   let the visitor switch native dialogs off for a page, and from then on a
+   prompt returns null without a word - the button simply stops working. #}
+<div class="modal fade" id="file-dialog" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" id="file-dialog-form">
+      <div class="modal-header">
+        <h5 class="modal-title" id="file-dialog-title">...</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="file-dialog-input" id="file-dialog-label"></label>
+        <input class="form-control" id="file-dialog-input" spellcheck="false" autocomplete="off">
+        <div class="form-text" id="file-dialog-help"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="file-dialog-ok">OK</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

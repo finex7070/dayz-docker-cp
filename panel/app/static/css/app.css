@@ -1,0 +1,347 @@
+/* Panel styling on top of Bootstrap 5.
+   Kept small on purpose: layout shell, sidebar and a few status elements.
+   Everything else uses stock Bootstrap components. */
+
+:root {
+  --sidebar-width: 15rem;
+  --panel-accent: #5ac47d;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* --- Layout shell --------------------------------------------------------- */
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex: 0 0 var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+
+  /* Stays put while a long page scrolls past it. Sticky rather than fixed:
+     the sidebar keeps its place in the flex row, so the content still gets
+     its width from the layout instead of from a hard-coded offset.
+     The height pins it to the viewport, and overflow-y keeps it usable on a
+     short window where the nav itself would not fit. */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.content {
+  flex: 1 1 auto;
+  min-width: 0;            /* lets wide tables and <pre> scroll instead of pushing the layout */
+  padding: 1.5rem 2rem 3rem;
+}
+
+.content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.content-head h1 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+@media (max-width: 768px) {
+  .layout { flex-direction: column; }
+  /* Stacked on a phone the sidebar sits above the content, and pinning it
+     there would eat the screen. It scrolls away with the rest. */
+  .sidebar {
+    width: 100%;
+    flex-basis: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--bs-border-color);
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+  .content { padding: 1.25rem 1rem 2rem; }
+}
+
+/* --- Brand and navigation ------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.brand small {
+  display: block;
+  color: var(--bs-secondary-color);
+  font-size: .75rem;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: .5rem;
+  background: var(--panel-accent);
+  color: #10221a;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.sidebar .nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: .4rem;
+  color: var(--bs-body-color);
+  padding: .45rem .65rem;
+}
+
+.sidebar .nav-link:hover { background: var(--bs-secondary-bg); }
+
+.sidebar .nav-link.active {
+  background: var(--bs-secondary-bg);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--panel-accent);
+}
+
+.badge-phase {
+  font-size: .65rem;
+  padding: .1rem .35rem;
+  border-radius: .25rem;
+  color: var(--bs-secondary-color);
+  border: 1px solid var(--bs-border-color);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  font-size: .85rem;
+}
+
+.signed-in {
+  color: var(--bs-secondary-color);
+  margin-bottom: .5rem;
+}
+
+/* --- Cards and status ----------------------------------------------------- */
+
+.stat-label {
+  color: var(--bs-secondary-color);
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: .25rem 0;
+}
+
+/* Same idea inside a card that already has a heading - a full stat-value
+   would compete with it. Tabular figures keep a ticking uptime from
+   shifting the layout every second. */
+.stat-value-sm {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: .15rem 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-note {
+  color: var(--bs-secondary-color);
+  font-size: .8rem;
+}
+
+.setup-card { border-color: var(--panel-accent); }
+
+/* --- Job output ----------------------------------------------------------- */
+
+.job-output {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0;
+  padding: .75rem .9rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: .4rem;
+  background: var(--bs-body-bg);
+  font-size: .8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;      /* long SteamCMD lines wrap instead of scrolling sideways */
+  word-break: break-word;
+}
+
+/* The log view fills the screen, unlike the short job output above it. */
+.log-output {
+  max-height: min(65vh, 40rem);
+}
+
+.log-error { color: var(--bs-danger-text-emphasis, #ea868f); }
+.log-warn  { color: var(--bs-warning-text-emphasis, #ffda6a); }
+
+.job-output:empty::before {
+  content: "waiting for output ...";
+  color: var(--bs-secondary-color);
+}
+
+.guard-box {
+  padding: .9rem;
+  border: 1px solid var(--bs-warning);
+  border-radius: .4rem;
+  background: color-mix(in srgb, var(--bs-warning) 8%, transparent);
+}
+
+.status-dot {
+  flex: 0 0 auto;
+  width: .65rem;
+  height: .65rem;
+  margin-top: .4rem;
+  border-radius: 50%;
+  background: var(--bs-secondary-color);
+}
+
+.status-dot.ok   { background: var(--panel-accent); }
+.status-dot.warn { background: var(--bs-warning); }
+
+/* Next to a line of text rather than at the top of a list item. */
+.status-dot-inline {
+  display: inline-block;
+  margin-top: 0;
+  vertical-align: middle;
+}
+
+.feature-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--bs-secondary-color);
+}
+
+.feature-list li { margin-bottom: .35rem; }
+
+/* --- Login and error pages ------------------------------------------------ */
+
+.login-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 24rem;
+  padding: 2rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: .75rem;
+  background: var(--bs-tertiary-bg);
+}
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 1.75rem;
+}
+
+.login-brand .brand-mark { margin: 0 auto .75rem; }
+.login-brand h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+.login-brand p  { color: var(--bs-secondary-color); margin: 0; font-size: .9rem; }
+
+.login-foot {
+  margin: 1.5rem 0 0;
+  font-size: .78rem;
+  color: var(--bs-secondary-color);
+  text-align: center;
+}
+
+.error-code {
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--bs-secondary-color);
+}
+
+/* Workshop search results: a fixed thumbnail keeps every card the same
+   height, so six results are three even rows regardless of image sizes. */
+.mod-thumb {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: .35rem;
+  background: var(--bs-tertiary-bg);
+}
+
+.mod-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .7rem;
+  color: var(--bs-secondary-color);
+  border: 1px dashed var(--bs-border-color);
+}
+
+/* Settings cards. A Bootstrap row stretches every card in a line to the
+   tallest one, which with cards of two and seven fields leaves half the page
+   empty. CSS columns pack them vertically instead, so a short card is followed
+   by the next one rather than by whitespace. */
+.settings-grid { column-gap: 1rem; }
+
+.settings-grid > .card {
+  /* inline-block + width keeps a card from being split across columns in
+     browsers that ignore break-inside on its own. */
+  display: inline-block;
+  width: 100%;
+  margin-bottom: 1rem;
+  break-inside: avoid;
+}
+
+@media (min-width: 992px) {
+  .settings-grid { column-count: 2; }
+}
+
+@media (min-width: 1600px) {
+  .settings-grid { column-count: 3; }
+}
+
+/* --- file browser ------------------------------------------------------- */
+
+/* Both columns hold one control each and must not grow with the window;
+   without a width the name column would lose the room it actually needs. */
+.file-table .file-select { width: 2.5rem; }
+.file-table .file-menu-col { width: 3rem; }
+
+.file-table td a { text-decoration: none; }
+.file-table td a:hover { text-decoration: underline; }
+
+/* The way up is a row like any other, but not a file - it should not read as
+   one entry among the contents. */
+.file-table .file-up td { border-bottom-width: 2px; }
+.file-table .file-up a { font-family: var(--bs-font-monospace); }
+
+/* Bootstrap's display utilities are !important, and so is its own
+   [hidden] rule - with .d-flex winning on source order, an element carrying
+   both stayed visible. The mods pager did exactly that: always on screen, even
+   with no search running. Ours comes last, so hidden means hidden. */
+[hidden] { display: none !important; }
+
+/* The connect address next to the server controls. Bootstrap paints <code>
+   pink for inline code in prose; here it is a value to read and copy, not a
+   snippet, so it takes the normal text colour. */
+.server-address {
+  color: var(--bs-body-color);
+  font-size: .95rem;
+  user-select: all;          /* one click selects the whole address */
+}
