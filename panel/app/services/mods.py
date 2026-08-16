@@ -276,7 +276,65 @@ class ModService:
             f"Update mod {workshop_ids[0]}" if len(workshop_ids) == 1
             else f"Update {len(workshop_ids)} mods"
         )
-        return self._download_job("mod_update", title, workshop_ids, wipe=False)
+
+        stale, problem = self.outdated(workshop_ids)
+        if not stale:
+            return self._nothing_stale_job(title, len(workshop_ids))
+
+        return self._download_job("mod_update", title, stale, wipe=False,
+                                  note=self._skip_note(workshop_ids, stale, problem))
+
+    def outdated(self, workshop_ids: list[int]) -> tuple[list[int], str]:
+        """Which of these changed on the workshop since they were installed.
+
+        Also returns why the check could not be made, if it could not - and
+        then every ID comes back as stale. Skipping a download because Steam
+        was unreachable would leave the server on an old mod without saying so.
+        """
+        known = {mod.workshop_id: mod for mod in self.registry.all()}
+        try:
+            details = lookup_workshop_items([i for i in workshop_ids if i in known])
+        except ModError as exc:
+            return list(workshop_ids), str(exc)
+
+        stale = []
+        for workshop_id in workshop_ids:
+            mod = known.get(workshop_id)
+            item = details.get(workshop_id)
+            if mod is None or item is None:
+                # Nothing to compare against - let SteamCMD have the last word.
+                stale.append(workshop_id)
+                continue
+            # updated_at is when the panel finished installing it, so a workshop
+            # update older than that is already on disk. Missing files count as
+            # stale whatever the dates say.
+            on_disk = (self.settings.paths.server / mod.dir_name).is_dir()
+            if not on_disk or item["updated_at"] > mod.updated_at:
+                stale.append(workshop_id)
+        return stale, ""
+
+    @staticmethod
+    def _skip_note(asked: list[int], stale: list[int], problem: str) -> str:
+        if problem:
+            return f"[panel] Could not ask Steam what changed ({problem}) - updating all."
+        skipped = len(asked) - len(stale)
+        if not skipped:
+            return ""
+        return (f"[panel] {skipped} of {len(asked)} mod(s) are already current "
+                f"and are not downloaded again.")
+
+    def _nothing_stale_job(self, title: str, count: int) -> Job:
+        """A job that finds there is nothing to do, rather than no job at all.
+
+        The callers - the page and the start sequence - both wait on a job and
+        report what it says. "Every mod is current" is an outcome worth seeing,
+        and it costs no SteamCMD run to reach it.
+        """
+        def runner(job: Job) -> None:
+            job.log_line(f"[panel] All {count} mod(s) are up to date on the workshop.")
+            job.detail = "Nothing to update - every mod is current."
+
+        return jobs.start("mod_update", title, runner)
 
     def reinstall(self, workshop_id: int) -> Job:
         if not self.registry.get(workshop_id):
@@ -347,27 +405,40 @@ class ModService:
         ids: list[int],
         wipe: bool,
         mod_type: str | None = None,
+        note: str = "",
     ) -> Job:
         def runner(job: Job) -> None:
-            for index, workshop_id in enumerate(ids, start=1):
-                if job.cancelled:
-                    return
-                job.detail = f"Downloading mod {workshop_id} ({index}/{len(ids)})"
-                job.log_line(f"[panel] --- mod {workshop_id} ({index}/{len(ids)}) ---")
+            if note:
+                job.log_line(note)
 
-                if not self.steamcmd.download_workshop_item(job, workshop_id):
-                    return  # _run already recorded why
+            job.detail = f"Downloading {len(ids)} mod(s) in one SteamCMD run"
+            downloaded = self.steamcmd.download_workshop_items(job, ids)
+            if job.cancelled:
+                return
 
+            # Every mod that arrived is installed even when the run as a whole
+            # failed: one item Steam would not serve must not throw away the
+            # four that came down with it.
+            ready, missing = [], []
+            for workshop_id in ids:
                 try:
                     mod = self._integrate(job, workshop_id, wipe=wipe, mod_type=mod_type)
                 except ModError as exc:
-                    job.state = JobState.FAILED
-                    job.error = str(exc)
+                    missing.append(f"{workshop_id}: {exc}")
                     job.log_line(f"[panel] {exc}")
-                    return
+                    continue
+                ready.append(mod)
                 job.log_line(f"[panel] {mod.name} is ready ({mod.size_mb:.1f} MB)")
 
-            job.detail = f"{len(ids)} mod(s) ready - restart the server to load them"
+            if not downloaded:
+                return  # _run already recorded why, and set the state
+
+            if missing:
+                job.state = JobState.FAILED
+                job.error = "; ".join(missing)
+                return
+
+            job.detail = f"{len(ready)} mod(s) ready - restart the server to load them"
 
         return jobs.start(kind, title, runner)
 
@@ -600,6 +671,32 @@ class ModService:
 
 
 # --- Steam Web API ------------------------------------------------------------
+
+
+def lookup_workshop_items(workshop_ids: list) -> dict:
+    """Details for several workshop items in one request, keyed by ID.
+
+    The keyless endpoint takes a list, so asking about ten mods costs one call.
+    That matters because this runs before every server start, where the point
+    is to find out that nothing needs downloading at all.
+    """
+    ids = list(dict.fromkeys(int(value) for value in workshop_ids))
+    if not ids:
+        return {}
+
+    params = {"itemcount": str(len(ids))}
+    for index, workshop_id in enumerate(ids):
+        params[f"publishedfileids[{index}]"] = str(workshop_id)
+
+    data = _api_post("/ISteamRemoteStorage/GetPublishedFileDetails/v1/", params)
+    details = (data.get("response") or {}).get("publishedfiledetails") or []
+
+    found = {}
+    for item in details:
+        if str(item.get("result")) != "1" or not item.get("publishedfileid"):
+            continue
+        found[int(item["publishedfileid"])] = _item_summary(item)
+    return found
 
 
 def lookup_workshop_item(workshop_id: int, app_id: int) -> dict:

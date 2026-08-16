@@ -310,6 +310,21 @@ re-download those.
 
 ## Release notes
 
+**1.1.2** — Updating mods no longer runs SteamCMD once per mod. The panel asks
+Steam in a single request what has changed since each mod was installed, skips
+the ones that have not, and downloads the rest in one SteamCMD run with one
+login — which is what "Steam is rate limiting this account" was about, and most
+of the waiting. With nothing to update it finishes in under a second without
+starting SteamCMD at all.
+
+The Upload button counts the upload up and says when the panel is writing it,
+instead of a large upload looking like a dead button for minutes. An answer
+that is not JSON — a reverse proxy refusing the body, for one — is reported
+instead of reloading the page over it. Row menus in the file browser and on the
+Backups page are no longer clipped by the table they sit in, and a snapshot's
+download menu now also offers `serverDZ.cfg`, `ban.txt` and `whitelist.txt`,
+each handed over as the file itself rather than wrapped in a tar.
+
 **1.1.1** — An installed mod's ID links to its workshop page, in a new tab.
 Deleting a folder in the file browser takes what is in it, instead
 of refusing until the folder was emptied by hand. The file browser no longer
