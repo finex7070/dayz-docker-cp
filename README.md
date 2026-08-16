@@ -117,9 +117,10 @@ ready to be moved to another time.
 ### Files
 
 The server directory in the browser: edit text files, upload, download, rename,
-move, delete, with bulk actions and a `..` row instead of an up button. *Zip
-selected* packs files and folders into an archive; a `.zip` unpacks in place,
-backing up whatever it replaces.
+move, delete, with bulk actions and a `..` row instead of an up button. A
+deleted folder goes with everything in it, and nothing here keeps copies — the
+Backups page is what a file comes back from. *Zip selected* packs files and
+folders into an archive, and a `.zip` unpacks in place.
 
 ![Files](docs/img/files.png)
 
@@ -308,6 +309,16 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.1.1** — An installed mod's ID links to its workshop page, in a new tab.
+Deleting a folder in the file browser takes what is in it, instead
+of refusing until the folder was emptied by hand. The file browser no longer
+keeps copies of its own in `data/backup` on a delete, an overwriting upload or
+an extract: that directory belongs to the Backups page and its restic
+repository, which is also what a deleted file comes back from. An install that
+ran an earlier version has a `data/backup/files/` directory left over — nothing
+writes to it any more, and it can be removed once you no longer want what is
+in it.
 
 **1.1.0** — Files can be packed into a zip and unpacked again on the Files page.
 A DayZ Launcher `modlist.html` can be imported on the Mods page and

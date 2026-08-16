@@ -41,7 +41,7 @@ from .services.server_settings import SettingsStore
 from .services.startup import StartupSequence
 from .services.steamcmd import SteamCmdService
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 STARTED_AT = time.time()
 
@@ -128,7 +128,7 @@ def create_app() -> Flask:
     # Rooted at the server directory: everything worth editing is below it, and
     # a root any higher would put the panel's own settings and the Steam
     # sentry file within reach of a text editor in a browser.
-    app.extensions["files"] = FileService(settings.paths.server, settings.paths.backup)
+    app.extensions["files"] = FileService(settings.paths.server)
     # 127.0.0.1: the query goes to the server in this very container, never out.
     app.extensions["query"] = QueryService("127.0.0.1", settings.steam_query_port)
 

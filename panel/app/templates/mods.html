@@ -164,8 +164,13 @@
                   </span>
                 {% endif %}
                 <br>
+                {# The ID is the workshop item, so it is the ID that links to
+                   it. A new tab because the page it leaves behind may have a
+                   download running in it. #}
                 <small class="text-secondary">
-                  <code>{{ mod.dir_name }}</code> &middot; ID {{ mod.workshop_id }}
+                  <code>{{ mod.dir_name }}</code> &middot;
+                  <a href="{{ mod.url }}" target="_blank" rel="noopener"
+                     title="Open on the Steam Workshop">ID {{ mod.workshop_id }}</a>
                 </small>
               </td>
               <td>
