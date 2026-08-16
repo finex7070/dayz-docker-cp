@@ -10,7 +10,13 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from flask_login import login_required
 
 from ..services.audit import record
-from ..services.schedules import ACTIONS, NEEDS_COMMAND, ScheduleError
+from ..services.schedules import (
+    ACTIONS,
+    MAX_ACTIONS,
+    MAX_DELAY_SECONDS,
+    NEEDS_COMMAND,
+    ScheduleError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +45,8 @@ def index():
         schedules=_service().list(),
         action_kinds=ACTIONS,
         needs_command=sorted(NEEDS_COMMAND),
+        max_delay=MAX_DELAY_SECONDS,
+        max_actions=MAX_ACTIONS,
         presets=PRESETS,
         # TZ names the zone the operator set; tzname is what the process
         # actually resolved it to, which is the one cron will use.
@@ -63,6 +71,12 @@ def create():
 def update(schedule_id: str):
     payload = request.get_json(silent=True) or {}
     return _write(lambda: _service().update(schedule_id, payload))
+
+
+@bp.post("/<schedule_id>/duplicate")
+@login_required
+def duplicate(schedule_id: str):
+    return _write(lambda: _service().duplicate(schedule_id))
 
 
 @bp.post("/<schedule_id>/delete")

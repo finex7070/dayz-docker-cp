@@ -41,6 +41,38 @@
   </div>
 </div>
 
+{# ---- launcher mod list ---- #}
+<div class="card mb-3">
+  <div class="card-header">Mod list</div>
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label" for="modlist-file">DayZ Launcher preset</label>
+        <input class="form-control" type="file" id="modlist-file"
+               accept=".html,.htm,text/html">
+      </div>
+      <div class="col-md-3 d-grid">
+        <button class="btn btn-primary" data-mod-action="import">Import</button>
+      </div>
+      <div class="col-md-3 d-grid">
+        {# A link, not a button: the file comes straight off the response, and
+           no data-mod-action, or the page's click handler would cancel it. #}
+        {% set exportable = mods | selectattr('enabled') | list %}
+        <a class="btn btn-outline-secondary {% if not exportable %}disabled{% endif %}"
+           href="{{ url_for('mods.export_list') }}"
+           {% if not exportable %}aria-disabled="true" tabindex="-1"{% endif %}>Export</a>
+      </div>
+    </div>
+
+    <div class="form-text mt-2">
+      Import adds every mod in the list as a client mod, skipping the installed
+      ones. Export writes the enabled mods, client and server.
+    </div>
+
+    <div id="modlist-note" class="alert alert-secondary mt-3" hidden></div>
+  </div>
+</div>
+
 {# ---- search ---- #}
 <div class="card mb-3">
   <div class="card-header">Search the workshop</div>

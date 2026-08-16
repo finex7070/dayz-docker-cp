@@ -29,6 +29,8 @@
     jobDetail: document.getElementById("mod-job-detail"),
     jobOutput: document.getElementById("mod-job-output"),
     jobError: document.getElementById("mod-job-error"),
+    modlist: document.getElementById("modlist-file"),
+    modlistNote: document.getElementById("modlist-note"),
   };
 
   var cursor = 0;
@@ -69,6 +71,13 @@
     return response.json().catch(function () {
       return { ok: false, error: "The panel sent an unreadable reply." };
     });
+  }
+
+  function modlistNote(message, bad) {
+    if (!el.modlistNote) return;
+    el.modlistNote.hidden = !message;
+    el.modlistNote.textContent = message || "";
+    el.modlistNote.className = "alert mt-3 " + (bad ? "alert-danger" : "alert-secondary");
   }
 
   function showError(message) {
@@ -413,6 +422,39 @@
           if (res.ok === false && res.error) lookupError(res.error);
           else afterChange(res);
         });
+      return;
+    }
+
+    if (action === "import") {
+      var file = el.modlist && el.modlist.files[0];
+      if (!file) {
+        modlistNote("Choose a mod list first.", true);
+        return;
+      }
+      var body = new FormData();
+      body.append("modlist", file);
+      target.disabled = true;
+      modlistNote("");
+      // No Content-Type of our own: the browser has to set the multipart
+      // boundary, and one written by hand has none.
+      fetch("/mods/import", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": CSRF, Accept: "application/json" },
+        body: body,
+      }).then(readJson).then(function (res) {
+        target.disabled = false;
+        if (res.handled) return;
+        if (!res.ok) {
+          // Next to the file field, not in the job box further down: what went
+          // wrong is about the file that was just picked.
+          modlistNote(res.error || "The mod list could not be imported.", true);
+          return;
+        }
+        el.modlist.value = "";
+        modlistNote(res.message || "");
+        afterChange(res);
+      });
       return;
     }
 

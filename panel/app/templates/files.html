@@ -14,6 +14,8 @@
         data-rename-url="{{ url_for('files.rename') }}"
         data-move-url="{{ url_for('files.move') }}"
         data-bulk-delete-url="{{ url_for('files.bulk_delete') }}"
+        data-compress-url="{{ url_for('files.compress') }}"
+        data-extract-url="{{ url_for('files.extract') }}"
         data-create-url="{{ url_for('files.create') }}"
         data-max-upload-mb="{{ max_upload_mb }}"
         data-csrf="{{ csrf_token() }}"></script>
@@ -37,6 +39,9 @@
     <span class="small text-secondary me-2" id="file-selection" hidden></span>
     {# Only shown with a selection: bulk buttons that do nothing are worse than
        absent ones, because they invite the click that explains nothing. #}
+    <button class="btn btn-outline-secondary btn-sm" data-file-action="bulk-zip" hidden>
+      Zip selected
+    </button>
     <button class="btn btn-outline-secondary btn-sm" data-file-action="bulk-move" hidden>
       Move selected
     </button>

@@ -19,6 +19,8 @@
     renameUrl: script.dataset.renameUrl,
     moveUrl: script.dataset.moveUrl,
     bulkDeleteUrl: script.dataset.bulkDeleteUrl,
+    compressUrl: script.dataset.compressUrl,
+    extractUrl: script.dataset.extractUrl,
     createUrl: script.dataset.createUrl,
     maxUploadMb: parseInt(script.dataset.maxUploadMb, 10) || 0,
     csrf: script.dataset.csrf,
@@ -291,6 +293,13 @@
       items.push({ action: "open-file", label: "Edit" });
       items.push({ action: "download", label: "Download" });
     }
+    items.push({ action: "zip", label: "Zip" });
+    // Offered on the suffix alone. Whether it really is an archive is decided
+    // by reading it, which is the server's job and not worth a round trip
+    // before the menu can be drawn.
+    if (!entry.is_dir && /\.zip$/i.test(entry.name)) {
+      items.push({ action: "extract", label: "Extract here" });
+    }
     items.push({ action: "delete", label: "Delete", css: "text-danger" });
 
     items.forEach(function (spec) {
@@ -526,6 +535,29 @@
 
     if (action === "move") { moveTo([path]); return; }
     if (action === "bulk-move") { moveTo(selected()); return; }
+    if (action === "zip") { zip([path]); return; }
+    if (action === "bulk-zip") { zip(selected()); return; }
+
+    if (action === "extract") {
+      ask({
+        title: "Extract here",
+        input: false,
+        help: "Unpack " + path.split("/").pop() + " into /" + (here || "")
+              + "? Files it replaces are backed up first.",
+        okLabel: "Extract",
+      }).then(function (answer) {
+        if (answer === null) return;
+        post(cfg.extractUrl, { path: path }).then(function (res) {
+          if (res.handled) return;
+          if (res.listing) render(res.listing);
+          setError(res.error || "");
+          if (!res.ok) return;
+          setNote("Unpacked " + res.files + " file" + (res.files === 1 ? "" : "s")
+                  + (res.replaced ? ", " + res.replaced + " replaced" : "") + ".");
+        });
+      });
+      return;
+    }
 
     if (action === "bulk-delete") {
       var picked = selected();
@@ -549,6 +581,34 @@
       });
     }
   });
+
+  // One entry gives the archive its name; several fall back to the folder they
+  // are in, because a zip called after the first of eight files is a lie.
+  function zip(paths) {
+    if (!paths.length) return;
+    var base = paths.length === 1
+      ? paths[0].split("/").pop()
+      : (here.split("/").pop() || "server");
+
+    ask({
+      title: "Zip " + paths.length + " entr" + (paths.length === 1 ? "y" : "ies"),
+      label: "Archive name",
+      value: base + ".zip",
+      help: "Written into /" + (here || "") + ".",
+      okLabel: "Zip",
+    }).then(function (name) {
+      if (!name) return;
+      post(cfg.compressUrl, { paths: paths, target: here, name: name })
+        .then(function (res) {
+          if (res.handled) return;
+          if (res.listing) render(res.listing);
+          setError(res.error || "");
+          if (!res.ok) return;
+          setNote("Packed " + res.files + " file" + (res.files === 1 ? "" : "s")
+                  + " into " + res.created + " (" + bytes(res.size) + ").");
+        });
+    });
+  }
 
   function moveTo(paths) {
     if (!paths.length) return;

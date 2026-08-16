@@ -37,7 +37,8 @@ Delete the container, keep the volume, and your server is unchanged.
 - **🧩 Mod management** — Install workshop mods by ID, URL or search, set each
   one as a client mod (`-mod`) or server-only mod (`-serverMod`), reorder the
   load order, update, reinstall or remove. Signature keys are copied along
-  automatically.
+  automatically. A DayZ Launcher `modlist.html` can be imported, and exported
+  again for your players.
 - **⚙️ Settings, not text editors** — Launch parameters and the important
   `serverDZ.cfg` values as real forms with validation. Five values are written
   for you before every start, so they can never drift: `steamQueryPort`, the
@@ -48,10 +49,13 @@ Delete the container, keep the volume, and your server is unchanged.
   server, see kicks and bans as they occur.
 - **⏰ Schedules** — Recurring tasks in crontab format, each with a *chain* of
   actions. The one everybody wants: announce → lock → stop → back up → start,
-  as a single entry that cannot fall out of sync with itself.
+  as a single entry that cannot fall out of sync with itself. Each action can
+  wait a number of seconds before it runs and say whether a failure should stop
+  the rest, so a restart with warnings at −5, −1 and 0 minutes is one entry.
 - **📁 File browser** — Browse `server/`, edit text files in the browser
   (`Ctrl+S` saves), upload, download, rename, move and delete — with bulk
-  actions. Binary files are recognised and offered for download instead of
+  actions. Pack any selection into a zip to download or keep, and unpack one
+  in place. Binary files are recognised and offered for download instead of
   being destroyed by a text editor.
 - **💾 Deduplicated backups** — Snapshots of the whole server directory powered
   by [restic](https://restic.net/). The first costs the full size, every later
@@ -79,7 +83,10 @@ and the server's own output streaming in — with an RCON prompt underneath it.
 ### Mods
 
 Workshop mods by ID, URL or search. Each one is a client mod or a server-only
-mod, and the order in this list is the order on the command line.
+mod, and the order in this list is the order on the command line. A DayZ
+Launcher preset (`modlist.html`) imports as client mods; the export writes the
+enabled mods, client and server, into a file players can drop into their
+launcher.
 
 ![Mods](docs/img/mods.png)
 
@@ -99,15 +106,20 @@ the file.
 
 ### Schedules
 
-Crontab expressions, each with a chain of actions that runs top to bottom and
-stops at the first failure.
+Crontab expressions, each with a chain of actions that runs top to bottom.
+Actions are reordered with the arrow buttons, copied with *Copy*, can wait a
+number of seconds before they run, and can be told to let the chain carry on
+when they fail. *Duplicate* copies a whole entry — the copy comes out disabled,
+ready to be moved to another time.
 
 ![Schedules](docs/img/schedules.png)
 
 ### Files
 
 The server directory in the browser: edit text files, upload, download, rename,
-move, delete, with bulk actions and a `..` row instead of an up button.
+move, delete, with bulk actions and a `..` row instead of an up button. *Zip
+selected* packs files and folders into an archive; a `.zip` unpacks in place,
+backing up whatever it replaces.
 
 ![Files](docs/img/files.png)
 
@@ -200,8 +212,9 @@ it under the same tag.
    RCON stays off, and with it you get the console, lock/unlock and everything
    the scheduler can do. Note that BattlEye only opens its port about two
    minutes after a start, once the mission has loaded.
-4. **Add your mods** on the *Mods* page, by workshop ID or URL. Set client
-   versus server mods, then put the load order right with the arrows.
+4. **Add your mods** on the *Mods* page, by workshop ID or URL — or import a
+   `modlist.html` from the DayZ Launcher. Set client versus server mods, then
+   put the load order right with the arrows.
 5. **Check the launch parameters** under *Settings → General* — mission, CPU
    count, FPS limit, logging switches.
 6. **Press Start** on the dashboard and watch the console.
@@ -295,6 +308,15 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.1.0** — Files can be packed into a zip and unpacked again on the Files page.
+A DayZ Launcher `modlist.html` can be imported on the Mods page and
+exported again for players. Schedule actions can be reordered with arrow
+buttons, copied, wait a set number of seconds before they run, and carry on
+past their own failure — a restart with warnings at −5, −1 and 0 minutes is one
+entry instead of four. A whole schedule can be duplicated, disabled, from the
+list. Fixes a scheduled run recording nothing at all: writing the audit entry
+threw in the scheduler's own thread, after the actions had already run.
 
 **1.0.1** — *Apply retention now* no longer fails on a fresh install, where
 there is no repository yet; paths from the container no longer appear in
