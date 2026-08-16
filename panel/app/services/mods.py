@@ -37,6 +37,7 @@ from pathlib import Path
 
 from ..config import Settings, normalize_mod_name
 from .jobs import Job, JobState, jobs
+from .modlist import ModlistEntry, ModlistError, parse_modlist, render_modlist
 from .server_settings import SettingsStore
 from .steamcmd import SteamCmdService
 
@@ -284,6 +285,57 @@ class ModService:
     def update_all(self) -> Job | None:
         ids = [m.workshop_id for m in self.registry.all()]
         return self.update(ids) if ids else None
+
+    # --- launcher mod lists -----------------------------------------------
+
+    def import_modlist(self, text: str) -> dict:
+        """Install a DayZ Launcher preset.
+
+        Everything in the file becomes a client mod: the list is what players
+        load, and a mod the players load is by definition not server-only. A
+        mod that belongs on the server alone is switched over afterwards, in
+        the row it already has.
+        """
+        try:
+            entries = parse_modlist(text)
+        except ModlistError as exc:
+            raise ModError(str(exc)) from exc
+
+        known = {mod.workshop_id for mod in self.registry.all()}
+        fresh = [entry for entry in entries if entry.workshop_id not in known]
+        skipped = len(entries) - len(fresh)
+
+        if not fresh:
+            raise ModError(
+                f"All {len(entries)} mods in that list are already installed."
+            )
+
+        title = (
+            f"Import {len(fresh)} mod from a mod list" if len(fresh) == 1
+            else f"Import {len(fresh)} mods from a mod list"
+        )
+        job = self._download_job(
+            kind="mod_install",
+            title=title,
+            ids=[entry.workshop_id for entry in fresh],
+            wipe=False,
+            mod_type="client",
+        )
+        return {"job": job, "added": len(fresh), "skipped": skipped}
+
+    def export_modlist(self) -> str:
+        """The enabled mods, client and server alike, as a launcher preset.
+
+        A disabled mod is not on the command line, so the server does not load
+        it - handing it to players would have them install something that is
+        not being run.
+        """
+        mods = [mod for mod in self.registry.all() if mod.enabled]
+        if not mods:
+            raise ModError("There are no enabled mods to export.")
+        return render_modlist(
+            [ModlistEntry(mod.workshop_id, mod.name) for mod in mods]
+        )
 
     def _download_job(
         self,

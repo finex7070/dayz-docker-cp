@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 MAX_ACTIONS = 10
 MAX_NAME = 60
 MAX_COMMAND = 200
+
+# An hour. Long enough for the warnings in front of a restart, short enough
+# that a typo in the field cannot hold the entry open until the next firing.
+MAX_DELAY_SECONDS = 3600
 
 # Between two actions of the same entry. "say" then "#lock" back to back is
 # fine, but a stop followed by a start needs the process to be gone first -
@@ -65,15 +69,30 @@ class ScheduleError(ValueError):
 class Action:
     kind: str
     command: str = ""
+    # Waited out before the action runs, not after it. A warning at minus five
+    # minutes is written as "say, then wait 240, then say" - the operator reads
+    # the delay of a line as what has to pass before that line happens.
+    delay: int = 0
+    continue_on_fail: bool = False
 
     def to_dict(self) -> dict:
-        return {"kind": self.kind, "command": self.command}
+        return {
+            "kind": self.kind,
+            "command": self.command,
+            "delay": self.delay,
+            "continue_on_fail": self.continue_on_fail,
+        }
+
+    @property
+    def kind_label(self) -> str:
+        """The kind on its own - what the list groups by."""
+        return ACTIONS.get(self.kind, self.kind)
 
     @property
     def label(self) -> str:
         if self.kind == "rcon":
             return f"RCON: {self.command}"
-        return ACTIONS.get(self.kind, self.kind)
+        return self.kind_label
 
 
 @dataclass(frozen=True)
@@ -120,6 +139,27 @@ def parse_cron(expression: str) -> CronTrigger:
         raise ScheduleError(f"That is not a valid crontab expression: {exc}") from exc
 
 
+def parse_delay(value: object) -> int:
+    """Seconds to wait in front of an action. Empty means none."""
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return 0
+    try:
+        seconds = int(text)
+    except ValueError:
+        raise ScheduleError(
+            "A delay is a whole number of seconds, e.g. 300 for five minutes."
+        ) from None
+    if seconds < 0:
+        raise ScheduleError("A delay cannot be negative.")
+    if seconds > MAX_DELAY_SECONDS:
+        raise ScheduleError(
+            f"A delay may be at most {MAX_DELAY_SECONDS} seconds "
+            f"({MAX_DELAY_SECONDS // 60} minutes)."
+        )
+    return seconds
+
+
 def parse_actions(raw: object) -> tuple[Action, ...]:
     if not isinstance(raw, list) or not raw:
         raise ScheduleError("Add at least one action.")
@@ -136,7 +176,14 @@ def parse_actions(raw: object) -> tuple[Action, ...]:
             raise ScheduleError("An RCON action needs a command.")
         if len(command) > MAX_COMMAND:
             raise ScheduleError(f"A command may be at most {MAX_COMMAND} characters.")
-        actions.append(Action(kind, command if kind in NEEDS_COMMAND else ""))
+        actions.append(
+            Action(
+                kind=kind,
+                command=command if kind in NEEDS_COMMAND else "",
+                delay=parse_delay((item or {}).get("delay")),
+                continue_on_fail=bool((item or {}).get("continue_on_fail", False)),
+            )
+        )
     return tuple(actions)
 
 
@@ -211,6 +258,25 @@ class ScheduleStore:
             self._write()
         return True
 
+    def record_run(self, schedule_id: str, result: str, ok: bool) -> bool:
+        """Write back the outcome, and nothing else.
+
+        A chain with delays runs for minutes, and the entry can be edited or
+        deleted while it does. Writing the whole record back would undo that
+        edit, or resurrect the deleted entry - so this touches the three run
+        fields on whatever the entry looks like now, and says False when it is
+        gone.
+        """
+        with self._lock:
+            current = self._items.get(schedule_id)
+            if current is None:
+                return False
+            self._items[schedule_id] = replace(
+                current, last_run=time.time(), last_result=result, last_ok=ok
+            )
+            self._write()
+        return True
+
 
 class ScheduleService:
     """Keeps APScheduler in step with the stored entries."""
@@ -229,6 +295,9 @@ class ScheduleService:
             job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
         )
         self._lock = threading.Lock()
+        # Set on the way out, so an action waiting out its delay stops waiting
+        # instead of holding the process open for the rest of the hour.
+        self._stopping = threading.Event()
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -239,6 +308,7 @@ class ScheduleService:
         log.info("Scheduler running with %d entries", len(self._store.list()))
 
     def shutdown(self) -> None:
+        self._stopping.set()
         try:
             self._scheduler.shutdown(wait=False)
         except Exception:  # noqa: BLE001 - shutdown must not raise on the way out
@@ -280,16 +350,56 @@ class ScheduleService:
         self._sync(schedule)
         return schedule
 
+    def duplicate(self, schedule_id: str) -> Schedule:
+        """Copy an entry, ready to be changed rather than ready to fire.
+
+        The copy comes out disabled on purpose: an enabled twin of a 4 a.m.
+        restart is a second 4 a.m. restart, and copying is what one does
+        *before* moving it to another time.
+        """
+        current = self._require(schedule_id)
+        copy = Schedule(
+            id=uuid.uuid4().hex[:12],
+            name=self._copy_name(current.name),
+            cron=current.cron,
+            actions=current.actions,
+            enabled=False,
+        )
+        self._store.put(copy)
+        self._sync(copy)
+        return copy
+
+    def _copy_name(self, name: str) -> str:
+        """"X (copy)", then "X (copy 2)" - the list sorts by name, so a copy
+        lands next to what it was copied from."""
+        taken = {item.name for item in self._store.list()}
+        marks = ["(copy)"] + [f"(copy {n})" for n in range(2, 100)]
+        for mark in marks:
+            candidate = f"{name[:MAX_NAME - len(mark) - 1]} {mark}".strip()
+            if candidate not in taken:
+                return candidate
+        return name[:MAX_NAME]
+
     def delete(self, schedule_id: str) -> None:
         self._require(schedule_id)
         self._store.delete(schedule_id)
         self._unschedule(schedule_id)
 
     def run_now(self, schedule_id: str) -> Schedule:
-        """Run an entry immediately - the only honest way to test one."""
+        """Run an entry immediately - the only honest way to test one.
+
+        In a thread of its own, because an entry with delays runs for minutes
+        and the browser is holding a request open on this.
+        """
         schedule = self._require(schedule_id)
-        self._run(schedule.id, manual=True)
-        return self._require(schedule_id)
+        threading.Thread(
+            target=self._run,
+            args=(schedule.id,),
+            kwargs={"manual": True},
+            name=f"schedule-{schedule.id}",
+            daemon=True,
+        ).start()
+        return schedule
 
     def _require(self, schedule_id: str) -> Schedule:
         schedule = self._store.get(schedule_id)
@@ -330,7 +440,7 @@ class ScheduleService:
     def _view(self, schedule: Schedule) -> dict:
         data = schedule.to_dict()
         data["actions"] = [
-            {"kind": action.kind, "command": action.command, "label": action.label}
+            dict(action.to_dict(), label=action.label, kind_label=action.kind_label)
             for action in schedule.actions
         ]
         data["next_run"] = self.next_run(schedule.id)
@@ -356,43 +466,57 @@ class ScheduleService:
                      "manual" if manual else "cron")
             results, ok = self._run_actions(schedule)
 
-        if self._audit is not None:
-            self._audit.record("schedules.fired", schedule.name, ok=ok,
-                               detail="; ".join(results))
+        # The result is stored before it is audited, not after: the work has
+        # already happened either way, and the page is where the operator looks
+        # for it.
+        detail = "; ".join(results)
+        if not self._store.record_run(schedule.id, detail, ok):
+            log.info("Schedule '%s' was deleted while it ran", schedule.name)
 
-        self._store.put(
-            Schedule(
-                id=schedule.id,
-                name=schedule.name,
-                cron=schedule.cron,
-                actions=schedule.actions,
-                enabled=schedule.enabled,
-                last_run=time.time(),
-                last_result="; ".join(results),
-                last_ok=ok,
-            )
-        )
+        if self._audit is not None:
+            self._audit.record("schedules.fired", schedule.name, ok=ok, detail=detail)
+
+    def _wait(self, seconds: float) -> bool:
+        """Wait out a delay. False means the panel is going down - give up."""
+        return not self._stopping.wait(seconds)
 
     def _run_actions(self, schedule: Schedule) -> tuple[list[str], bool]:
-        """Run the actions in order, stopping at the first failure.
+        """Run the actions in order, each after its own delay.
 
-        Carrying on would be worse than stopping: the point of a sequence like
-        announce - lock - restart is the order, and a restart that runs after a
-        failed lock is not the thing the operator asked for.
+        A failure ends the chain, because the point of a sequence like announce
+        - lock - restart is the order, and a restart that runs after a failed
+        lock is not the thing the operator asked for. Where that does not hold,
+        the action says so itself: an announcement nobody hears is no reason to
+        call off the restart it was announcing.
         """
         results: list[str] = []
+        ok = True
+
         for index, action in enumerate(schedule.actions):
-            if index:
-                time.sleep(ACTION_GAP_SECONDS)
+            # The one-second gap stays as the floor between two actions; a
+            # delay is only ever longer than it.
+            wait = max(action.delay, ACTION_GAP_SECONDS) if index else action.delay
+            if wait and not self._wait(wait):
+                results.append(f"{action.label}: not run, the panel is shutting down")
+                return results, False
+
             try:
                 message = self._runner(action)
             except Exception as exc:  # noqa: BLE001 - the reason is the result
-                results.append(f"{action.label}: {exc}")
-                log.warning("Schedule '%s' stopped at '%s': %s",
+                ok = False
+                if not action.continue_on_fail:
+                    results.append(f"{action.label}: {exc}")
+                    log.warning("Schedule '%s' stopped at '%s': %s",
+                                schedule.name, action.label, exc)
+                    return results, False
+                results.append(f"{action.label}: {exc} (continued)")
+                log.warning("Schedule '%s' carried on past '%s': %s",
                             schedule.name, action.label, exc)
-                return results, False
+                continue
+
             results.append(f"{action.label}: {message or 'done'}")
-        return results, True
+
+        return results, ok
 
 
 def make_runner(sequence, manager, rcon, backup=None):

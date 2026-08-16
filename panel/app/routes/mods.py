@@ -7,7 +7,14 @@ follows the job's output the way the dashboard does.
 
 from __future__ import annotations
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+)
 from flask_login import login_required
 
 from ..services.audit import record
@@ -22,6 +29,10 @@ from ..services.mods import (
 )
 
 bp = Blueprint("mods", __name__, url_prefix="/mods")
+
+# A launcher preset with a hundred mods is under 50 KB. Anything past this is
+# the wrong file, and reading it into memory to find that out is the mistake.
+MAX_MODLIST_BYTES = 1024 * 1024
 
 
 def _service() -> ModService:
@@ -99,6 +110,61 @@ def install():
         return _job(lambda: _service().install(workshop_id, mod_type))
     except ModError as exc:
         return jsonify(ok=False, error=str(exc)), 400
+
+
+@bp.post("/import")
+@login_required
+def import_list():
+    """Take over a DayZ Launcher preset, as client mods."""
+    uploaded = request.files.get("modlist")
+    if uploaded is None or not uploaded.filename:
+        return jsonify(ok=False, error="No file was selected."), 400
+
+    raw = uploaded.read(MAX_MODLIST_BYTES + 1)
+    if len(raw) > MAX_MODLIST_BYTES:
+        return jsonify(
+            ok=False,
+            error="That file is far larger than a mod list - is it the right one?",
+        ), 400
+
+    name = uploaded.filename
+    try:
+        # utf-8-sig: the launcher writes a byte order mark, and a stray BOM in
+        # front of the XML declaration is the kind of thing a parser trips on.
+        result = _service().import_modlist(raw.decode("utf-8-sig", errors="replace"))
+    except ModError as exc:
+        record("mods.import", name, ok=False, detail=str(exc))
+        return jsonify(ok=False, error=str(exc)), 400
+    except JobBusy as busy:
+        record("mods.import", name, ok=False, detail=f"busy: {busy.active.title}")
+        return jsonify(
+            ok=False,
+            error=f"Another job is already running: {busy.active.title}",
+            job_id=busy.active.id,
+        ), 409
+
+    detail = f"{result['added']} new, {result['skipped']} already installed"
+    record("mods.import", name, detail=detail)
+    return jsonify(ok=True, job_id=result["job"].id, message=detail)
+
+
+@bp.get("/export")
+@login_required
+def export_list():
+    """All mods as a launcher preset, for handing to players."""
+    service = _service()
+    try:
+        body = service.export_modlist()
+    except ModError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+    enabled = [mod for mod in service.registry.all() if mod.enabled]
+    record("mods.export", f"{len(enabled)} mods")
+    return Response(
+        body,
+        mimetype="text/html",
+        headers={"Content-Disposition": 'attachment; filename="modlist.html"'},
+    )
 
 
 @bp.post("/<int:workshop_id>/update")

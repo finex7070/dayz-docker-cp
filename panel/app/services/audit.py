@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import g, has_request_context, request
+from flask import g, has_app_context, has_request_context, request
 from flask_login import current_user
 
 log = logging.getLogger(__name__)
@@ -103,13 +103,18 @@ def record(action: str, target: str = "", ok: bool = True, detail: str = "") -> 
 
 
 def _user() -> str:
-    if not has_request_context():
-        # The scheduler and the watchdog act without anyone asking.
-        return getattr(g, "audit_actor", "") or "system"
-    try:
-        return current_user.get_id() or "anonymous"
-    except Exception:  # noqa: BLE001 - never let the record break the action
-        return "unknown"
+    if has_request_context():
+        try:
+            return current_user.get_id() or "anonymous"
+        except Exception:  # noqa: BLE001 - never let the record break the action
+            return "unknown"
+    # The scheduler and the watchdog act without anyone asking. They also act
+    # from threads of their own, where there is no application context and `g`
+    # raises rather than returning the default - which used to take the caller
+    # down with it, on the line after its work was already done.
+    if not has_app_context():
+        return "system"
+    return getattr(g, "audit_actor", "") or "system"
 
 
 def _ip() -> str:

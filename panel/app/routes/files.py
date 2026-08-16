@@ -214,6 +214,51 @@ def bulk_delete():
     return _bulk_answer(done, failed, paths[0].rpartition("/")[0], "deleted")
 
 
+@bp.post("/compress")
+@login_required
+def compress():
+    """Pack a selection into one zip, written into the directory on screen."""
+    payload = request.get_json(silent=True) or {}
+    paths = [str(item) for item in payload.get("paths", []) if str(item).strip()]
+    directory = payload.get("target", "")
+    name = payload.get("name", "")
+    if not paths:
+        return jsonify(ok=False, error="Nothing was selected."), 400
+
+    def run():
+        service = _service()
+        result = service.compress(paths, directory, name)
+        record("files.compress", result["path"], detail=f"{len(paths)} selected")
+        return {
+            "created": result["path"],
+            "files": result["files"],
+            "size": result["size"],
+            "listing": service.listing(directory),
+        }
+
+    return _answer(run, "files.compress", name)
+
+
+@bp.post("/extract")
+@login_required
+def extract():
+    payload = request.get_json(silent=True) or {}
+    path = str(payload.get("path", ""))
+
+    def run():
+        service = _service()
+        result = service.extract(path)
+        record("files.extract", path,
+               detail=f"{result['files']} files, {result['replaced']} replaced")
+        return {
+            "files": result["files"],
+            "replaced": result["replaced"],
+            "listing": service.listing(result["path"]),
+        }
+
+    return _answer(run, "files.extract", path)
+
+
 def _bulk_answer(done: list, failed: list, directory: str, verb: str):
     """One answer shape for operations over a selection.
 

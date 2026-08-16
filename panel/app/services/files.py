@@ -18,10 +18,18 @@ from __future__ import annotations
 import logging
 import shutil
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Zipping and unzipping happen inside the request, so they have to stay short.
+# A mission folder is seconds; the whole server directory is what the Backups
+# page is for, and it does it incrementally instead of copying everything.
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+
+ARCHIVE_SUFFIX = ".zip"
 
 # Read for the binary sniff, and the ceiling for the editor. 2 MB is already
 # far past what anyone edits in a textarea; beyond it the browser is the thing
@@ -319,6 +327,144 @@ class FileService:
         path.unlink()
         return "file"
 
+    # --- archives ----------------------------------------------------------
+
+    def compress(self, relatives: list[str], relative_dir: str, name: str) -> dict:
+        """Pack files and folders into one zip, written where they live.
+
+        A folder keeps its own name at the top of the archive, so unpacking it
+        somewhere else gives back the folder rather than its loose contents.
+        """
+        directory = self.resolve(relative_dir)
+        if not directory.is_dir():
+            raise FileError("That is not a directory.")
+
+        root = self._root.resolve()
+        sources = []
+        for relative in relatives:
+            path = self.resolve(relative)
+            if path == root:
+                raise FileError(
+                    "The server directory as a whole is what the Backups page "
+                    "is for - it stores only what changed."
+                )
+            if not path.exists():
+                raise FileError(f"'{relative}' no longer exists.")
+            sources.append(path)
+        if not sources:
+            raise FileError("Nothing was selected.")
+
+        archive_name = check_name(name)
+        if not archive_name.lower().endswith(ARCHIVE_SUFFIX):
+            archive_name += ARCHIVE_SUFFIX
+        archive = directory / archive_name
+        if archive.exists():
+            raise FileError(f"'{archive_name}' already exists here.")
+
+        # Listed before the archive is opened, so the file being written can
+        # never end up inside itself.
+        members = _members(sources)
+        if not members:
+            raise FileError("There is nothing to pack - the selection is empty.")
+
+        total = sum(path.stat().st_size for path, _ in members if path.is_file())
+        if total > MAX_ARCHIVE_BYTES:
+            raise FileError(
+                f"That is {total // (1024 * 1024)} MB. Anything above "
+                f"{MAX_ARCHIVE_BYTES // (1024 * 1024)} MB belongs on the "
+                "Backups page - a zip that large would hold the request open."
+            )
+
+        temp = archive.with_name(archive.name + ".panel-tmp")
+        try:
+            with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED) as handle:
+                for path, arcname in members:
+                    handle.write(path, arcname)
+        except (OSError, zipfile.BadZipFile) as exc:
+            temp.unlink(missing_ok=True)
+            raise FileError(f"The archive could not be written: {exc}") from exc
+
+        temp.replace(archive)
+        return {
+            "path": self.relative(archive),
+            "name": archive_name,
+            "files": sum(1 for path, _ in members if path.is_file()),
+            "size": archive.stat().st_size,
+        }
+
+    def extract(self, relative: str) -> dict:
+        """Unpack a zip where it lies.
+
+        Files it would overwrite are backed up first, the same as an upload -
+        an archive dropped on top of a mission is exactly how someone loses a
+        types.xml they had been editing.
+        """
+        archive = self.resolve(relative)
+        if not archive.is_file():
+            raise FileError("That file does not exist.")
+        if not zipfile.is_zipfile(archive):
+            raise FileError("That is not a zip archive.")
+
+        directory = archive.parent
+        written = replaced = 0
+        try:
+            with zipfile.ZipFile(archive) as handle:
+                members = handle.infolist()
+                total = sum(member.file_size for member in members)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise FileError(
+                        f"That archive unpacks to {total // (1024 * 1024)} MB, "
+                        f"past the {MAX_ARCHIVE_BYTES // (1024 * 1024)} MB this "
+                        "page will write in one request."
+                    )
+
+                for member in members:
+                    target = self._member_path(directory, member.filename)
+                    if member.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.is_dir():
+                        raise FileError(f"'{member.filename}' is a directory here.")
+                    if target.exists():
+                        self.backup(target)
+                        replaced += 1
+                    with handle.open(member) as source, target.open("wb") as sink:
+                        shutil.copyfileobj(source, sink)
+                    written += 1
+        except zipfile.BadZipFile as exc:
+            raise FileError(f"That archive is damaged: {exc}") from exc
+
+        return {
+            "path": self.relative(directory),
+            "files": written,
+            "replaced": replaced,
+        }
+
+    def _member_path(self, directory: Path, name: str) -> Path:
+        """Where an archive entry goes - or a refusal.
+
+        Checked against the folder being unpacked into, not only against the
+        root: an entry called `../../serverDZ.cfg` stays inside the root and is
+        still not where the archive said it was going. Nothing is cleaned out
+        of the name first, for the reason the module opens with - a repaired
+        name is a guess at what the archive meant.
+        """
+        if not name or name.strip("/") in {"", ".", ".."}:
+            raise FileError("The archive holds an entry with no name.")
+
+        base = directory.resolve()
+        try:
+            target = (directory / name).resolve()
+        except OSError as exc:
+            raise FileError(f"The archive holds an unusable name: {name} ({exc})") from exc
+
+        outside_folder = target != base and base not in target.parents
+        outside_root = self._root.resolve() not in target.parents
+        if outside_folder or outside_root:
+            raise FileError(f"The archive tries to write outside its folder: {name}")
+        return target
+
     # --- backups -----------------------------------------------------------
 
     def backup(self, path: Path) -> str | None:
@@ -347,6 +493,33 @@ class FileService:
 
         _prune(target_dir, path.name, KEEP_BACKUPS)
         return str(target)
+
+
+def _members(sources: list[Path]) -> list[tuple[Path, str]]:
+    """Every path to pack, with the name it gets inside the archive.
+
+    Symlinks are skipped rather than followed: following one would copy a file
+    from outside the server directory into the archive, and a link pointing at
+    its own parent would walk forever.
+    """
+    members: list[tuple[Path, str]] = []
+    for source in sources:
+        if source.is_file():
+            members.append((source, source.name))
+            continue
+
+        base = source.parent
+        # The folder itself first, so an empty one survives the round trip.
+        members.append((source, source.relative_to(base).as_posix() + "/"))
+        for child in sorted(source.rglob("*")):
+            if child.is_symlink():
+                continue
+            arcname = child.relative_to(base).as_posix()
+            if child.is_dir():
+                members.append((child, arcname + "/"))
+            elif child.is_file():
+                members.append((child, arcname))
+    return members
 
 
 def _prune(directory: Path, prefix: str, keep: int) -> None:

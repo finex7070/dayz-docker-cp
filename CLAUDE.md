@@ -15,6 +15,25 @@ on the host. Paths in the UI and in messages are relative to the volume:
 `server/mpmissions/`, `panel/backup_key`. This includes messages that came out
 of another tool — see `BackupService.clean()`.
 
+## Keep the text in the panel short
+
+Help texts, hints and card footers are one or two lines. Say what the control
+does, not why it was built that way — the reasoning belongs in a code comment,
+where it is read once by whoever changes the code, not on every page load.
+
+```
+The actions run top to bottom. Delay is waited out before the action runs, so
+a restart with warnings reads as one list: announce, wait, announce again,
+wait, restart. A failure ends the rest unless Continue after fail is set …
+```
+
+is three lines too long for
+
+```
+Top to bottom. Delay waits before the action, Continue after fail carries on
+past an error.
+```
+
 ## Test after every change
 
 Reason about it, then **check it against the running container**. A change is
