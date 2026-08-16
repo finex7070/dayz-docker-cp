@@ -4,20 +4,25 @@ The remote console of a DayZ server is not the Source RCON everyone knows: it
 is BattlEye's own protocol, and it runs over **UDP**. That has consequences
 this module has to carry rather than hide:
 
-* There is no connection. "Connected" means the server accepted a login and has
-  heard from us within the last 45 seconds - stay quiet longer and it forgets
-  us without saying so. Hence the keepalive thread.
+* There is no connection. "Logged in" means the server accepted a password and
+  has heard from us within the last 45 seconds - stay quiet longer and it
+  forgets us without saying so.
 * Datagrams can be lost, duplicated or overtake each other. Every command
-  carries a sequence number, and answers are matched against it instead of
-  being read in order.
+  carries a sequence number, and the answer is matched against it.
 * Long answers (`players` on a full server) arrive split across several
   datagrams that have to be reassembled by index.
 
-One receiver thread reads everything and dispatches it; request threads wait on
-an event for their sequence number. The alternative - each caller reading from
-the socket itself - would have every thread swallowing the answers meant for
-the others, and server messages would only surface when someone happened to be
-listening.
+The session lasts one command: log in, ask, read the answer, close. A session
+held open would have to be kept alive every 18 seconds forever, and every lost
+keepalive - a normal event on UDP, and a certainty in the two minutes a server
+spends loading its mission - reads as a disconnect in the console. What that
+bought was a permanent listener for server messages, which the panel does not
+depend on: the server's own output goes to the console through the process, not
+through RCON.
+
+All of those short sessions speak from **one** source port. BattlEye counts a
+client per address and port and keeps it for 45 seconds, so a port per command
+becomes ten clients in ten seconds - and it answers the eleventh with silence.
 
 Packet layout: ``'B' 'E'`` + CRC32 of the payload (4 bytes, little endian) +
 payload. The payload is ``0xFF``, a type byte, and the type's own data.
@@ -42,19 +47,15 @@ TYPE_LOGIN = 0x00
 TYPE_COMMAND = 0x01
 TYPE_MESSAGE = 0x02
 
-# BattlEye drops a client that has been silent for 45 s. Sending at less than
-# half that leaves room for a lost datagram before the server gives up on us.
-KEEPALIVE_SECONDS = 18.0
-LOGIN_TIMEOUT = 6.0
+LOGIN_TIMEOUT = 4.0
+# A lost login datagram would otherwise cost the whole timeout for nothing.
+# Only the login is repeated: a command sent twice may well run twice.
+LOGIN_RETRY = 1.0
 COMMAND_TIMEOUT = 10.0
 RECEIVE_SIZE = 8192
 
-# Backoff for reconnects. BattlEye needs a while after the server process
-# starts before it answers at all, so the first retries are quick and the last
-# one is slow enough not to fill the log while a server is down for good.
-RETRY_DELAYS = (2.0, 5.0, 10.0, 30.0)
-
-SUPERVISOR_TICK = 2.0
+# How long a single recv waits before the loop checks its deadline again.
+POLL_SECONDS = 0.25
 
 
 class RconError(RuntimeError):
@@ -63,17 +64,18 @@ class RconError(RuntimeError):
 
 @dataclass
 class _Pending:
-    """One command waiting for its answer, possibly in several parts."""
+    """One answer, possibly arriving in several parts."""
 
-    done: threading.Event = field(default_factory=threading.Event)
     parts: dict[int, str] = field(default_factory=dict)
     expected: int = 1
 
     def add(self, index: int, total: int, text: str) -> None:
         self.expected = max(total, 1)
         self.parts[index] = text
-        if len(self.parts) >= self.expected:
-            self.done.set()
+
+    @property
+    def complete(self) -> bool:
+        return len(self.parts) >= self.expected
 
     def text(self) -> str:
         return "".join(self.parts[index] for index in sorted(self.parts))
@@ -102,13 +104,158 @@ def decode(data: bytes) -> tuple[int, bytes]:
     return body[1], body[2:]
 
 
-class RconService:
-    """Keeps one RCON session alive for as long as the server is running.
+class _Session:
+    """One socket, one login, one command. Everything here is synchronous.
 
-    The session is not opened on demand: server messages (connects, kicks,
-    chat) are only sent to clients that are logged in, so a panel that only
-    connected when someone typed a command would miss everything in between -
-    which is most of what makes the console worth watching.
+    A receiver thread would only be needed to serve several callers from one
+    socket - with a session per command there is exactly one caller, and the
+    reading loop is the caller's own.
+    """
+
+    def __init__(self, host: str, port: int, note, bind_port: int = 0) -> None:
+        self._note = note
+        self._port = port
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.settimeout(POLL_SECONDS)
+        if bind_port:
+            # BattlEye remembers a client by address *and* port, and it keeps
+            # that entry for 45 s after the last word from it. Twenty commands
+            # from twenty ports are twenty clients to it, and it stops
+            # answering; from one port they are the same client, logging in
+            # again. Hence the fixed port - see RconService._bind_port.
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._sock.bind(("", bind_port))
+        # connect() on UDP only fixes the peer, which is what we want: it
+        # filters datagrams from anywhere else and lets send() be used.
+        self._sock.connect((host, port))
+        self._drain()
+
+    def _drain(self) -> None:
+        """Throw away what is already queued on the port.
+
+        Sequence numbers start over with every login, so a very late answer to
+        the previous command carries this one's number. Reading it out before
+        the login is what keeps the two apart.
+        """
+        self._sock.settimeout(0)
+        try:
+            while True:
+                self._sock.recv(RECEIVE_SIZE)
+        except OSError:
+            pass
+        finally:
+            self._sock.settimeout(POLL_SECONDS)
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+    def login(self, password: str) -> None:
+        payload = bytes([TYPE_LOGIN]) + password.encode("ascii", "replace")
+        deadline = time.monotonic() + LOGIN_TIMEOUT
+        next_send = 0.0
+
+        while time.monotonic() < deadline:
+            if time.monotonic() >= next_send:
+                self._transmit(payload)
+                next_send = time.monotonic() + LOGIN_RETRY
+
+            kind, body = self._read()
+            if kind != TYPE_LOGIN:
+                continue
+            if body[:1] == b"\x01":
+                return
+            raise RconError(
+                "The server rejected the RCON password - it uses the password "
+                "from its last start."
+            )
+
+        raise RconError("No answer on the RCON port - BattlEye may still be starting.")
+
+    def command(self, command: str, timeout: float) -> str:
+        """Ask, and reassemble the answer.
+
+        Sequence 0, because a login starts the count over: the server answers
+        0 and ignores anything else until it has seen it. With one command per
+        session there is never a second number.
+        """
+        seq = 0
+        self._transmit(bytes([TYPE_COMMAND, seq]) + command.encode("ascii", "replace"))
+
+        pending = _Pending()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            kind, body = self._read()
+            if kind == TYPE_COMMAND and body and body[0] == seq:
+                index, total, text = _part(body[1:])
+                pending.add(index, total, text)
+                if pending.complete:
+                    return pending.text()
+            elif kind == TYPE_MESSAGE and body:
+                self._message(body)
+
+        raise RconError(
+            f"No answer from RCON within {timeout:.0f}s - the command may still "
+            "have run."
+        )
+
+    def _message(self, body: bytes) -> None:
+        """A server message that arrived while we were listening.
+
+        The acknowledgement is not optional: without it the server keeps
+        resending the same message until it gives up on the client.
+        """
+        seq, text = body[0], _text(body[1:])
+        try:
+            self._transmit(bytes([TYPE_MESSAGE, seq]))
+        except RconError:
+            pass
+        for line in text.splitlines():
+            if line.strip():
+                self._note(f"[rcon] {line}")
+
+    def _transmit(self, payload: bytes) -> None:
+        try:
+            self._sock.send(encode(payload))
+        except ConnectionRefusedError as exc:
+            raise RconError(self._closed_port()) from exc
+        except OSError as exc:
+            raise RconError(f"Could not reach RCON: {exc}") from exc
+
+    def _read(self) -> tuple[int | None, bytes]:
+        """The next packet, or (None, b"") when nothing arrived in time."""
+        try:
+            data = self._sock.recv(RECEIVE_SIZE)
+        except socket.timeout:
+            return None, b""
+        except ConnectionRefusedError as exc:
+            # UDP has no connection to refuse - this is the ICMP answer of a
+            # host with nothing bound to the port, and it is the normal reply
+            # for the minute between the server process and BattlEye starting.
+            raise RconError(self._closed_port()) from exc
+        except OSError as exc:
+            raise RconError(f"Could not read from RCON: {exc}") from exc
+
+        try:
+            return decode(data)
+        except (ValueError, IndexError) as exc:
+            log.debug("Dropped an RCON datagram: %s", exc)
+            return None, b""
+
+    def _closed_port(self) -> str:
+        return (
+            f"Nothing is listening on RCON port {self._port} - BattlEye comes "
+            "up a moment after the server does."
+        )
+
+
+class RconService:
+    """Connects for the length of one command and closes again.
+
+    Commands are serialised. Sessions share one source port, so two at once
+    would be two sockets on it, each reading datagrams meant for the other.
     """
 
     def __init__(self, host: str, port: int, store, is_up, on_message) -> None:
@@ -118,68 +265,34 @@ class RconService:
         self._is_up = is_up
         self._on_message = on_message
 
-        self._lock = threading.RLock()
-        # Held for the length of a login attempt. The supervisor and a request
-        # thread can both decide to connect at the same moment; without this,
-        # the second one would open a socket the first is already logging in
-        # on and the answers would go to whichever won the race.
-        self._connect_lock = threading.Lock()
-        self._sock: socket.socket | None = None
-        self._seq = 0
-        self._pending: dict[int, _Pending] = {}
-        self._login_ok = threading.Event()
-        self._login_failed = threading.Event()
-
-        self._state = "idle"
+        self._turn = threading.Lock()
+        self._lock = threading.Lock()
+        # What went wrong last time, so the dashboard can show it next to the
+        # console instead of only in the alert of whoever clicked.
         self._error = ""
-        self._since: float | None = None
-        self._last_attempt = 0.0
-        self._session_password = ""
-        # A rejected password is not retried until it changes: a wrong password
-        # would otherwise produce a login attempt every few seconds forever,
-        # and BattlEye bans an address after enough of them.
-        self._rejected_password: str | None = None
-        self._attempts = 0
-        self._last_sent = 0.0
-
-        self._stop = threading.Event()
-        self._threads: list[threading.Thread] = []
-
-    # --- lifecycle ---------------------------------------------------------
-
-    def start(self) -> None:
-        thread = threading.Thread(target=self._supervise, name="rcon-supervisor", daemon=True)
-        self._threads.append(thread)
-        thread.start()
-
-    def shutdown(self) -> None:
-        self._stop.set()
-        self._disconnect("panel shutting down")
+        self._local_port = 0
 
     @property
     def configured(self) -> bool:
         return bool(self._password())
 
     @property
-    def connected(self) -> bool:
-        with self._lock:
-            return self._state == "connected"
+    def ready(self) -> bool:
+        """A command sent now has a chance of arriving."""
+        return bool(self._password()) and self._is_up()
 
     def status(self) -> dict:
         with self._lock:
-            return {
-                "state": self._state,
-                "connected": self._state == "connected",
-                "configured": bool(self._password()),
-                "error": self._error,
-                "port": self._port,
-                "uptime_seconds": int(time.monotonic() - self._since) if self._since else 0,
-            }
-
-    # --- commands ----------------------------------------------------------
+            error = self._error
+        return {
+            "configured": self.configured,
+            "ready": self.ready,
+            "error": error,
+            "port": self._port,
+        }
 
     def send(self, command: str, timeout: float = COMMAND_TIMEOUT) -> str:
-        """Run one command and return the server's answer.
+        """Log in, run one command, return the server's answer, hang up.
 
         An empty answer is normal - most commands acknowledge by doing the
         thing and saying nothing.
@@ -188,268 +301,83 @@ class RconService:
         if not command:
             raise RconError("No command given.")
 
-        self._require_session()
-
-        with self._lock:
-            sock = self._sock
-            if sock is None:
-                raise RconError("Not connected to RCON.")
-            seq = self._seq
-            self._seq = (self._seq + 1) % 256
-            pending = _Pending()
-            self._pending[seq] = pending
-
-        try:
-            self._transmit(bytes([TYPE_COMMAND, seq]) + command.encode("ascii", "replace"))
-            if not pending.done.wait(timeout):
-                raise RconError(
-                    f"No answer from RCON within {timeout:.0f}s - the command may "
-                    "still have run."
-                )
-            return pending.text()
-        finally:
-            with self._lock:
-                self._pending.pop(seq, None)
-
-    def _require_session(self) -> None:
-        """Explain why a command cannot be sent, in the operator's terms."""
-        if not self._password():
+        password = self._password()
+        if not password:
             raise RconError(
                 "No RCON password is set. Add one under Settings - General - "
                 "BattlEye and restart the server."
             )
         if not self._is_up():
             raise RconError("The server is not running.")
-        if self.connected:
-            return
 
-        # The supervisor reconnects on its own, but a click should not have to
-        # wait for the next tick to find that out.
-        self._connect()
-        if not self.connected:
-            with self._lock:
-                reason = self._error or "not connected yet"
-            raise RconError(f"RCON is not available: {reason}")
+        with self._turn:
+            session = None
+            try:
+                session = self._open()
+                session.login(password)
+                answer = session.command(command, timeout)
+            except RconError as exc:
+                self._remember(str(exc))
+                raise
+            except OSError as exc:
+                self._remember(str(exc))
+                raise RconError(f"Could not reach RCON: {exc}") from exc
+            finally:
+                if session is not None:
+                    session.close()
 
-    # --- connection --------------------------------------------------------
+        self._remember("")
+        return answer
+
+    # --- internals ---------------------------------------------------------
+
+    def _open(self) -> _Session:
+        port = self._bind_port()
+        try:
+            return _Session(self._host, self._port, self._note, port)
+        except OSError:
+            # Something else took the port while we were not using it. An
+            # ephemeral one still works - it only costs a client entry on the
+            # server side.
+            return _Session(self._host, self._port, self._note)
+
+    def _bind_port(self) -> int:
+        """The source port every session speaks from, picked once by the OS.
+
+        A fixed one is what keeps BattlEye seeing one client instead of a new
+        one per command: it holds an entry for 45 s after the last packet, and
+        once ten of them are open it simply stops answering the eleventh.
+        """
+        with self._lock:
+            if self._local_port:
+                return self._local_port
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("", 0))
+            port = probe.getsockname()[1]
+        except OSError:
+            return 0
+        finally:
+            probe.close()
+
+        with self._lock:
+            self._local_port = self._local_port or port
+            return self._local_port
 
     def _password(self) -> str:
         return self._store.current.rcon_password or ""
 
-    def _supervise(self) -> None:
-        """Open the session when the server is up, close it when it is not."""
-        while not self._stop.wait(SUPERVISOR_TICK):
-            try:
-                self._tick()
-            except Exception:  # noqa: BLE001 - a dead supervisor is worse
-                log.exception("RCON supervisor")
-
-    def _tick(self) -> None:
-        password = self._password()
-        wanted = bool(password) and self._is_up()
-
-        if not wanted:
-            if self._state != "idle":
-                self._disconnect("the server is not running" if password
-                                 else "no RCON password is set")
-            self._rejected_password = None
-            self._attempts = 0
-            return
-
-        # A changed password does not invalidate a live session: the running
-        # server still uses the password from its own start, so the session we
-        # have is the one that works until it restarts.
-        if self._rejected_password is not None and password != self._rejected_password:
-            self._rejected_password = None
-            self._attempts = 0
-
-        if self.connected:
-            self._keepalive()
-            return
-
-        if self._rejected_password == password:
-            return
-
-        delay = RETRY_DELAYS[min(self._attempts, len(RETRY_DELAYS) - 1)]
-        if time.monotonic() - self._last_attempt < delay:
-            return
-        self._connect()
-
-    def _connect(self) -> None:
-        with self._connect_lock:
-            self._connect_once()
-
-    def _connect_once(self) -> None:
-        password = self._password()
+    def _remember(self, error: str) -> None:
         with self._lock:
-            if self._state == "connected" or not password:
-                return
-            if self._rejected_password == password:
-                return
-            self._state = "connecting"
-            self._last_attempt = time.monotonic()
-            self._attempts += 1
-
-        sock = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(1.0)
-            # connect() on UDP only fixes the peer, which is what we want: it
-            # filters datagrams from anywhere else and lets send() be used.
-            sock.connect((self._host, self._port))
-
-            with self._lock:
-                self._sock = sock
-                self._session_password = password
-                self._pending.clear()
-                self._login_ok.clear()
-                self._login_failed.clear()
-
-            receiver = threading.Thread(target=self._receive, args=(sock,),
-                                        name="rcon-receiver", daemon=True)
-            receiver.start()
-
-            self._transmit(bytes([TYPE_LOGIN]) + password.encode("ascii", "replace"))
-            if not self._await_login():
-                return
-        except OSError as exc:
-            self._fail(f"{exc}", sock)
-            return
-
-        with self._lock:
-            self._state = "connected"
-            self._error = ""
-            self._since = time.monotonic()
-            self._attempts = 0
-        log.info("RCON connected on port %s", self._port)
-        self._note("[panel] RCON connected.")
-
-    def _await_login(self) -> bool:
-        deadline = time.monotonic() + LOGIN_TIMEOUT
-        while time.monotonic() < deadline:
-            if self._login_ok.wait(0.2):
-                return True
-            if self._login_failed.is_set():
-                with self._lock:
-                    self._rejected_password = self._session_password
-                self._fail(
-                    "the server rejected the RCON password - it uses the "
-                    "password from its last start"
-                )
-                self._note("[panel] RCON login rejected: wrong password.")
-                return False
-        self._fail("no answer on the RCON port")
-        return False
-
-    def _fail(self, reason: str, sock: socket.socket | None = None) -> None:
-        with self._lock:
-            self._state = "error"
-            self._error = reason
-            target = sock or self._sock
-            self._sock = None
-            self._since = None
-        _close(target)
-        log.info("RCON not available: %s", reason)
-
-    def _disconnect(self, reason: str) -> None:
-        with self._lock:
-            sock, was = self._sock, self._state
-            self._sock = None
-            self._state = "idle"
-            self._error = ""
-            self._since = None
-            self._pending.clear()
-        _close(sock)
-        if was == "connected":
-            log.info("RCON disconnected: %s", reason)
-            self._note(f"[panel] RCON disconnected: {reason}.")
-
-    # --- wire --------------------------------------------------------------
-
-    def _transmit(self, payload: bytes) -> None:
-        with self._lock:
-            sock = self._sock
-            if sock is None:
-                raise RconError("Not connected to RCON.")
-            self._last_sent = time.monotonic()
-        try:
-            sock.send(encode(payload))
-        except OSError as exc:
-            raise RconError(f"Could not reach RCON: {exc}") from exc
-
-    def _keepalive(self) -> None:
-        """An empty command packet, purely so the server keeps us on its list."""
-        with self._lock:
-            due = time.monotonic() - self._last_sent >= KEEPALIVE_SECONDS
-            if not due:
-                return
-            seq = self._seq
-            self._seq = (self._seq + 1) % 256
-            pending = _Pending()
-            self._pending[seq] = pending
-
-        try:
-            self._transmit(bytes([TYPE_COMMAND, seq]))
-        except RconError:
-            self._disconnect("send failed")
-            return
-
-        # No answer means the server forgot us (or is gone). Drop the session so
-        # the next tick builds a new one instead of talking into the void.
-        if not pending.done.wait(LOGIN_TIMEOUT):
-            self._disconnect("no answer to the keepalive")
-        with self._lock:
-            self._pending.pop(seq, None)
-
-    def _receive(self, sock: socket.socket) -> None:
-        while not self._stop.is_set():
-            with self._lock:
-                if self._sock is not sock:
-                    return
-            try:
-                data = sock.recv(RECEIVE_SIZE)
-            except socket.timeout:
-                continue
-            except OSError:
-                return
-
-            try:
-                kind, body = decode(data)
-            except (ValueError, IndexError) as exc:
-                log.debug("Dropped an RCON datagram: %s", exc)
-                continue
-            self._dispatch(kind, body)
-
-    def _dispatch(self, kind: int, body: bytes) -> None:
-        if kind == TYPE_LOGIN:
-            (self._login_ok if body[:1] == b"\x01" else self._login_failed).set()
-            return
-
-        if kind == TYPE_COMMAND and body:
-            seq, rest = body[0], body[1:]
-            index, total, text = _part(rest)
-            with self._lock:
-                pending = self._pending.get(seq)
-            if pending is not None:
-                pending.add(index, total, text)
-            return
-
-        if kind == TYPE_MESSAGE and body:
-            seq, text = body[0], _text(body[1:])
-            # The acknowledgement is not optional: without it the server keeps
-            # resending the same message until it gives up on the client.
-            try:
-                self._transmit(bytes([TYPE_MESSAGE, seq]))
-            except RconError:
-                pass
-            for line in text.splitlines():
-                if line.strip():
-                    self._note(f"[rcon] {line}")
+            self._error = error
+        if error:
+            log.info("RCON not available: %s", error)
 
     def _note(self, line: str) -> None:
         try:
             self._on_message(line)
-        except Exception:  # noqa: BLE001 - the console is not worth a dead thread
+        except Exception:  # noqa: BLE001 - the console is not worth a dead call
             log.exception("RCON message sink")
 
 
@@ -467,12 +395,3 @@ def _part(rest: bytes) -> tuple[int, int, str]:
 
 def _text(data: bytes) -> str:
     return data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _close(sock: socket.socket | None) -> None:
-    if sock is None:
-        return
-    try:
-        sock.close()
-    except OSError:
-        pass

@@ -46,12 +46,14 @@ Delete the container, keep the volume, and your server is unchanged.
   `dayzsetting.xml`.
 - **🖥️ Live console and RCON** — The server's output streams into the dashboard
   as it happens. BattlEye RCON is built in: send commands, lock and unlock the
-  server, see kicks and bans as they occur.
+  server. The panel connects for the command and hangs up again, so there is no
+  session to keep alive or lose.
 - **⏰ Schedules** — Recurring tasks in crontab format, each with a *chain* of
   actions. The one everybody wants: announce → lock → stop → back up → start,
   as a single entry that cannot fall out of sync with itself. Each action can
   wait a number of seconds before it runs and say whether a failure should stop
-  the rest, so a restart with warnings at −5, −1 and 0 minutes is one entry.
+  the rest, so a restart with warnings at −5, −1 and 0 minutes is one entry. An
+  entry can also sit out the runs where the server is stopped.
 - **📁 File browser** — Browse `server/`, edit text files in the browser
   (`Ctrl+S` saves), upload, download, rename, move and delete — with bulk
   actions. Pack any selection into a zip to download or keep, and unpack one
@@ -109,8 +111,10 @@ the file.
 Crontab expressions, each with a chain of actions that runs top to bottom.
 Actions are reordered with the arrow buttons, copied with *Copy*, can wait a
 number of seconds before they run, and can be told to let the chain carry on
-when they fail. *Duplicate* copies a whole entry — the copy comes out disabled,
-ready to be moved to another time.
+when they fail. *Run while the server is stopped* is on by default; off skips
+the run and says so in the list, which is what a restart chain wants while the
+server is down for maintenance. *Duplicate* copies a whole entry — the copy
+comes out disabled, ready to be moved to another time.
 
 ![Schedules](docs/img/schedules.png)
 
@@ -309,6 +313,18 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.1.3** — RCON no longer holds a session open. The panel logs in for the
+command, reads the answer and hangs up, which ends the `RCON disconnected: no
+answer to the keepalive` line that a loading server produced every time. *Lock*,
+*Unlock* and the command line now follow the server: they are active while it
+runs and a password is set, and a failed attempt says why instead of the button
+being greyed out for reasons of its own. That message also stays on screen —
+the status poll right behind the click used to wipe it.
+
+A schedule can now sit out the runs where the server is stopped: *Run while the
+server is stopped*, on by default. Off, the entry is stamped as *skipped*
+rather than starting a server that was deliberately down.
 
 **1.1.2** — Updating mods no longer runs SteamCMD once per mod. The panel asks
 Steam in a single request what has changed since each mod was installed, skips

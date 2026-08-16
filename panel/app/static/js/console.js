@@ -149,11 +149,13 @@
     node.textContent = message || "";
   }
 
-  // The RCON session has more states than "on" and "off", and the difference
-  // matters: no password is something the operator has to fix, while "not
-  // connected yet" resolves itself a few seconds after a start.
+  // What the last click was told - kept until the next one, see applyStatus.
+  var actionError = "";
+
+  // The panel connects for the command itself, so there is no session to
+  // report - what matters is whether a command can be sent, and what went
+  // wrong the last time one was.
   function rconLabel(rcon) {
-    if (rcon.connected) return { text: "RCON connected", state: "ok", title: "" };
     if (!rcon.configured) {
       return {
         text: "RCON off",
@@ -161,9 +163,11 @@
         title: "No RCON password is set (Settings - General - BattlEye).",
       };
     }
-    if (rcon.state === "connecting") return { text: "RCON connecting ...", state: "warn", title: "" };
-    if (rcon.error) return { text: "RCON unavailable", state: "warn", title: rcon.error };
-    return { text: "RCON idle", state: "", title: "Connects once the server is running." };
+    if (!rcon.ready) {
+      return { text: "RCON idle", state: "", title: "Needs a running server." };
+    }
+    if (rcon.error) return { text: "RCON error", state: "warn", title: rcon.error };
+    return { text: "RCON ready", state: "ok", title: "" };
   }
 
   function applyRcon(rcon) {
@@ -173,14 +177,17 @@
       el.rconStatus.title = label.title;
     }
     if (el.rconDot) el.rconDot.className = "status-dot status-dot-inline " + label.state;
-    el.input.disabled = !rcon.connected;
-    if (el.send) el.send.disabled = !rcon.connected;
+    el.input.disabled = !rcon.ready;
+    if (el.send) el.send.disabled = !rcon.ready;
   }
 
   function applyStatus(status) {
     if (!status) return;
     setAlert(el.blocked, status.blocked_reason);
-    setAlert(el.error, status.error);
+    // Both share the band, and the poll that follows a click must not wipe
+    // what the click just said: the server's own error is rarely set, so
+    // "" would overwrite the answer within a moment of showing it.
+    setAlert(el.error, status.error || actionError);
 
     var rcon = status.rcon || {};
     el.actions.querySelectorAll("[data-server-action]").forEach(function (btn) {
@@ -190,9 +197,9 @@
       // A backup needs the job slot, not the server: it can run while the
       // server is stopped, and must not while SteamCMD is writing.
       else if (action === "backup") btn.disabled = !!status.job_busy;
-      // Lock and Unlock are RCON commands, not process control: a running
-      // server without an RCON session cannot do them.
-      else btn.disabled = !rcon.connected;
+      // Lock and Unlock go over RCON, which needs a running server and a
+      // password - the connection itself is opened by the click.
+      else btn.disabled = !rcon.ready;
     });
     applyRcon(rcon);
 
@@ -229,11 +236,14 @@
         && !window.confirm("Really " + action + " the server?")) return;
 
     btn.disabled = true;
+    actionError = "";
+    setAlert(el.error, "");
     // Backup lives on its own page and brings its own URL along; everything
     // else is a verb on /server.
     post(btn.dataset.url || "/server/" + action).then(function (res) {
       if (res && res.handled) return;
-      if (res && res.error) setAlert(el.error, res.error);
+      actionError = (res && res.error) || "";
+      if (actionError) setAlert(el.error, actionError);
       // "Updating before start: mods." - the work happens in the background,
       // so without this the button click would look like it did nothing.
       if (res && res.message) append(["[panel] " + res.message]);

@@ -36,12 +36,12 @@ from .services.mods import ModService
 from .services.query import QueryService
 from .services.rcon import RconService
 from .services.schedules import ScheduleService, ScheduleStore, make_runner
-from .services.server import ServerError, ServerManager
+from .services.server import ServerError, ServerManager, ServerState
 from .services.server_settings import SettingsStore
 from .services.startup import StartupSequence
 from .services.steamcmd import SteamCmdService
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 STARTED_AT = time.time()
 
@@ -132,18 +132,21 @@ def create_app() -> Flask:
     # 127.0.0.1: the query goes to the server in this very container, never out.
     app.extensions["query"] = QueryService("127.0.0.1", settings.steam_query_port)
 
-    # RCON messages land in the same buffer as the server's own output: for the
-    # operator watching the console, a kick and the line that caused it are one
-    # story, and splitting them across two views would hide the order.
+    # Only a running server answers on the RCON port - BattlEye is not up while
+    # the process is still starting, and taking it down is the first thing a
+    # stop does. `manager.running` covers all three states, hence the narrower
+    # test here: it is what decides whether the dashboard offers the buttons.
     rcon = RconService(
         "127.0.0.1",
         settings.rcon_port,
         store,
-        is_up=lambda: manager.running,
+        is_up=lambda: manager.state is ServerState.RUNNING,
+        # Anything the server says while a command is in flight lands in the
+        # same buffer as its own output: for the operator watching the console,
+        # a kick and the line that caused it are one story.
         on_message=manager.console_note,
     )
     app.extensions["rcon"] = rcon
-    rcon.start()
 
     # The manager is handed in so a backup can tell a running server (the
     # snapshot is then tagged "hot") and a restore can stop it first.
@@ -161,6 +164,10 @@ def create_app() -> Flask:
         ScheduleStore(settings.paths.panel / "schedules.json"),
         make_runner(sequence, manager, rcon, backup),
         audit=audit,
+        # A server on its way up or down counts as started: an entry that skips
+        # while the server is stopped is about there being nothing to act on,
+        # and during those two states there is.
+        server_up=lambda: manager.running,
     )
     app.extensions["schedules"] = schedules_service
     schedules_service.start()
@@ -169,7 +176,6 @@ def create_app() -> Flask:
     # kill: it writes persistence on the way out. Gunicorn's worker exits
     # normally on SIGTERM, which is what runs this.
     atexit.register(manager.shutdown)
-    atexit.register(rcon.shutdown)
     atexit.register(schedules_service.shutdown)
 
     for blueprint in _BLUEPRINTS:
