@@ -76,6 +76,15 @@
         <input class="form-check-input" type="checkbox" id="schedule-enabled" checked>
         <label class="form-check-label" for="schedule-enabled">Enabled</label>
       </div>
+      <div class="form-check form-switch ms-2">
+        <input class="form-check-input" type="checkbox" id="schedule-when-stopped" checked>
+        <label class="form-check-label" for="schedule-when-stopped">
+          Run while the server is stopped
+        </label>
+      </div>
+    </div>
+    <div class="form-text mt-2">
+      Off skips the run instead of starting a server nobody asked for.
     </div>
 
     <div class="alert alert-danger mt-3 mb-0" id="schedule-error" hidden></div>

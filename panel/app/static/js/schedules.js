@@ -23,6 +23,7 @@
     cron: document.getElementById("schedule-cron"),
     preset: document.getElementById("schedule-preset"),
     enabled: document.getElementById("schedule-enabled"),
+    whenStopped: document.getElementById("schedule-when-stopped"),
     rows: document.getElementById("action-rows"),
     template: document.getElementById("action-template"),
     list: document.getElementById("schedule-rows"),
@@ -180,6 +181,7 @@
     el.cron.value = "";
     el.preset.value = "";
     el.enabled.checked = true;
+    el.whenStopped.checked = true;
     el.rows.textContent = "";
     addActionRow(null);
     el.title.textContent = "New schedule";
@@ -193,6 +195,7 @@
     el.cron.value = schedule.cron;
     el.preset.value = "";
     el.enabled.checked = schedule.enabled;
+    el.whenStopped.checked = schedule.run_when_stopped;
     el.rows.textContent = "";
     schedule.actions.forEach(addActionRow);
     el.title.textContent = "Editing: " + schedule.name;
@@ -208,6 +211,7 @@
       name: el.name.value,
       cron: el.cron.value,
       enabled: el.enabled.checked,
+      run_when_stopped: el.whenStopped.checked,
       actions: readActions(),
     };
 
@@ -315,9 +319,13 @@
     cell.appendChild(text(schedule.last_run_text));
 
     if (schedule.last_run) {
+      // Three outcomes, not two: null is an entry that fired and skipped
+      // because the server was stopped - neither a success nor a failure.
+      var skipped = schedule.last_ok === null || schedule.last_ok === undefined;
       var badge = document.createElement("span");
-      badge.className = "badge ms-2 " + (schedule.last_ok ? "text-bg-success" : "text-bg-danger");
-      badge.textContent = schedule.last_ok ? "ok" : "failed";
+      badge.className = "badge ms-2 " + (skipped ? "text-bg-secondary"
+        : schedule.last_ok ? "text-bg-success" : "text-bg-danger");
+      badge.textContent = skipped ? "skipped" : schedule.last_ok ? "ok" : "failed";
       // The full result is long and only interesting when something went
       // wrong, so it lives in the tooltip rather than in the row.
       badge.title = schedule.last_result || "";

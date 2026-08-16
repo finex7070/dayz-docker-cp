@@ -99,7 +99,7 @@ dayz-docker-cp/
 │       │   ├── files.py           # Dateibrowser, an /data/server verankert
 │       │   ├── audit.py           # Wer hat was getan (JSON Lines)
 │       │   ├── backup.py          # restic-Repository: Snapshot, Restore, Aufbewahrung
-│       │   └── rcon.py            # BattlEye-RCON über UDP, gehaltene Sitzung
+│       │   └── rcon.py            # BattlEye-RCON über UDP, eine Sitzung je Kommando
 │       ├── routes/
 │       │   ├── dashboard.py · server.py · console.py · jobs.py
 │       │   ├── logs.py · settings.py · mods.py · schedules.py · files.py · backups.py
@@ -249,7 +249,7 @@ Von oben nach unten in der Reihenfolge, in der man sie braucht:
 2. **Statuskacheln** — Server State, Server Uptime, Players, CPU, Memory.
    - *Players* kommt aus einer **Steam-A2S-Abfrage** an `127.0.0.1:<STEAM_QUERY_PORT>` — dieselbe Anfrage, die auch der Serverbrowser stellt. Kein RCON und kein Passwort nötig, deshalb funktioniert die Zahl unabhängig davon, ob RCON eingerichtet ist. Antwort wird 5 s zwischengespeichert, damit mehrere offene Tabs den Server nicht mit Anfragen überziehen.
    - *CPU* und *Memory* liest der `ServerManager` aus `/proc/<pid>` — keine zusätzliche Abhängigkeit für zwei Zahlen.
-3. **Steuerung** — Start · Restart · Stop · Lock · Unlock, rechts daneben der Zustand der RCON-Sitzung. Lock/Unlock sind RCON-Kommandos (`#lock`/`#unlock`) und folgen deshalb der Sitzung, nicht dem Serverzustand: ohne RCON sind sie deaktiviert, auch wenn der Server läuft. Der Auto-Restart-Schalter steht **nicht** hier, sondern nur unter *Settings → General → Behaviour* — zwei Bedienelemente für denselben Wert lassen einen davon immer falsch aussehen.
+3. **Steuerung** — Start · Restart · Stop · Lock · Unlock. Lock/Unlock sind RCON-Kommandos (`#lock`/`#unlock`); das Panel verbindet sich für den Klick selbst, sie brauchen also nur einen laufenden Server und ein gesetztes Passwort. Scheitert die Verbindung, steht der Grund im Fehlerband über den Knöpfen. Der Auto-Restart-Schalter steht **nicht** hier, sondern nur unter *Settings → General → Behaviour* — zwei Bedienelemente für denselben Wert lassen einen davon immer falsch aussehen.
 4. **Live-Konsole** — stdout des Serverprozesses per SSE, darunter ein Eingabefeld mit *Send* für RCON-Kommandos. Eingegebene Kommandos **und** ihre Antworten landen im gemeinsamen Puffer, nicht nur in der Antwort des eigenen Requests: wer in einem zweiten Tab zusieht, muss sehen, dass gerade jemand einen Spieler gekickt hat. `↑`/`↓` blättern durch die zuletzt gesendeten Kommandos.
 
 Aktualisierung: Statuskacheln über den gemeinsamen `/status.json`-Poll (10 s, Dauern ticken lokal weiter), Knopfzustände über `/server/status.json` (5 s), Konsole über SSE.
@@ -490,39 +490,53 @@ Live-Bild des laufenden Servers ist die Konsole auf dem Dashboard.
 BattlEye-RCON ist **nicht** das bekannte Source-RCON: eigenes Protokoll, und es
 läuft über **UDP**. Daraus folgt alles Weitere.
 
-- **Es gibt keine Verbindung.** „Verbunden" heißt: der Server hat einen Login
-  akzeptiert und hat innerhalb der letzten 45 s etwas von uns gehört. Wer
-  länger schweigt, wird kommentarlos vergessen — deshalb ein Keepalive alle 18 s
-  (ein leeres Kommandopaket).
+- **Es gibt keine Verbindung.** „Eingeloggt" heißt: der Server hat ein Passwort
+  akzeptiert und hat innerhalb der letzten 45 s etwas von uns gehört. Wer länger
+  schweigt, wird kommentarlos vergessen.
 - **Pakete gehen verloren, kommen doppelt oder überholen sich.** Jedes Kommando
-  trägt eine Sequenznummer, Antworten werden darüber zugeordnet statt der Reihe
-  nach gelesen. Die CRC32-Prüfsumme wird geprüft, nicht übersprungen: ein
-  verfälschtes Sequenzbyte würde die Antwort des einen Kommandos an den Aufrufer
-  eines anderen liefern.
+  trägt eine Sequenznummer, die Antwort wird darüber zugeordnet. Die
+  CRC32-Prüfsumme wird geprüft, nicht übersprungen: ein verfälschtes
+  Sequenzbyte würde die Antwort des einen Kommandos an den Aufrufer eines
+  anderen liefern.
 - **Lange Antworten kommen zerlegt.** `players` auf einem vollen Server verteilt
   sich auf mehrere Datagramme, die nach Index wieder zusammengesetzt werden.
-- **Ein Empfänger-Thread liest alles** und verteilt: Login-Ergebnis,
-  Kommandoantworten an den wartenden Aufrufer, Servermeldungen in den
-  Konsolenpuffer. Würde jeder Aufrufer selbst vom Socket lesen, schluckte er die
-  Antworten der anderen — und Servermeldungen kämen nur an, wenn zufällig jemand
-  zuhört.
 - **Servermeldungen müssen quittiert werden**, sonst schickt der Server dieselbe
   Meldung so lange erneut, bis er den Client aufgibt.
 
-**Die Sitzung wird nicht bei Bedarf geöffnet, sondern gehalten.** Servermeldungen
-(Verbindungen, Kicks, Chat) gehen nur an eingeloggte Clients — ein Panel, das
-sich erst beim Tippen eines Kommandos verbindet, verpasst genau das, was die
-Konsole sehenswert macht. Ein Supervisor-Thread baut die Sitzung auf, sobald der
-Server läuft und ein RCON-Passwort gesetzt ist, und gibt sie beim Stopp wieder
-auf.
+**Die Sitzung dauert ein Kommando.** Einloggen, fragen, Antwort lesen, Socket zu
+— alles synchron im Thread des Aufrufers, kein Empfänger-Thread, kein Supervisor.
+Eine gehaltene Sitzung müsste alle 18 s am Leben erhalten werden, und jedes
+verlorene Keepalive — auf UDP ein normaler Vorgang, und beim Laden der Mission
+antwortet BattlEye minutenlang gar nicht — steht als Verbindungsabbruch in der
+Konsole. Was sie einbrachte, war ein dauerhafter Zuhörer für Servermeldungen;
+daran hängt nichts: die Ausgabe des Servers kommt über den Prozess, nicht über
+RCON. Meldungen, die während eines Kommandos eintreffen, landen weiterhin im
+Konsolenpuffer.
 
-**Ein abgelehntes Passwort wird nicht erneut versucht**, bis es sich ändert oder
-der Server neu startet. Sonst liefe alle paar Sekunden ein Loginversuch — und
-BattlEye sperrt eine Adresse nach genug davon aus.
+**Ein fester Quellport.** BattlEye merkt sich einen Client an Adresse *und*
+Port und hält den Eintrag 45 s nach dem letzten Paket. Zwanzig Kommandos von
+zwanzig Ports sind für ihn zwanzig Clients — ab dem zehnten antwortet er nicht
+mehr (gemessen). Vom selben Port sind es Anmeldungen desselben Clients: 20
+Kommandos in 0,16 s. Der Port kommt einmal vom Betriebssystem und wird danach
+wiederverwendet; ist er zwischendurch belegt, tut es auch ein flüchtiger.
 
-Das Passwort in den Einstellungen zu ändern reißt eine laufende Sitzung **nicht**
-ab: der laufende Server benutzt weiter das Passwort seines eigenen Starts, die
-bestehende Sitzung ist also die einzige, die funktioniert.
+**Sequenznummer 0.** Ein Login setzt die Zählung zurück: der Server beantwortet
+0 und ignoriert alles andere (gemessen). Bei einem Kommando pro Sitzung gibt es
+nie eine zweite Nummer. Weil sich die Sitzungen einen Quellport teilen, wird der
+Socket vor dem Login leergelesen — eine sehr späte Antwort auf das vorige
+Kommando trüge sonst die Nummer des aktuellen.
+
+**Kommandos laufen nacheinander.** Zwei gleichzeitige Sitzungen wären zwei
+Sockets auf demselben Port, die einander die Datagramme wegläsen.
+
+**Ein abgelehntes Passwort wird nicht wiederholt**: es gibt keine Schleife mehr,
+die es könnte — ein Loginversuch entsteht nur noch durch einen Klick.
+
+Was das Panel anzeigt, ist `ready`: Passwort gesetzt und Server im Zustand
+*running*. Mehr lässt sich vor dem Klick nicht wissen, ohne genau die
+Dauerverbindung zu unterhalten, die hier abgeschafft wurde. Scheitert ein
+Kommando, steht der Grund am Kommando — und bis zum nächsten Erfolg neben dem
+RCON-Punkt unter der Konsole.
 
 ### 6.7 Schedules
 
@@ -555,6 +569,13 @@ still auseinanderfallen, sobald jemand einen davon verschiebt.
 - Ein Start oder Neustart kehrt zurück, sobald er angestoßen ist — vor ihm kann
   ein mehrminütiges Update liegen. Aktionen, die **vorher** passieren sollen,
   gehören deshalb darüber in die Liste
+- **„Run while the server is stopped"** je Eintrag, per Vorgabe an. Aus
+  übersprungen der Eintrag den Lauf, statt einen Server zu starten, den gerade
+  niemand haben will — die Neustartkette während einer Wartung ist der Fall.
+  Der Eintrag wird trotzdem gestempelt (`last_ok = null`, in der Liste ein
+  graues *skipped*): ausgefallen und ausgelassen sehen sonst gleich aus. Gilt
+  auch für *Run now* — ein Testlauf, der die Regel ignoriert, testet etwas
+  anderes als das, was um vier Uhr feuert
 
 ### 6.7a Files
 
@@ -885,10 +906,16 @@ Die Serverlogs heißen `DayZServer_<zeitstempel>.RPT` bzw. `.ADM` — nach jedem
 Zwischen `Popen` und der ersten Antwort auf Port 2305 liegen beim Testserver
 **gut zwei Minuten** — BattlEye kommt erst hoch, wenn die Mission geladen und
 `Player connect enabled` erreicht ist. Der erste Testlauf wartete 120 s und
-schloss daraus fälschlich auf einen Konfigurationsfehler. Konsequenzen: der
-Supervisor gibt nicht auf, sondern versucht es mit Backoff bis 30 s weiter, und
-das UI unterscheidet „noch nicht verbunden" von „kein Passwort gesetzt" — nur
-das zweite ist etwas, das der Betreiber reparieren muss.
+schloss daraus fälschlich auf einen Konfigurationsfehler.
+
+Genauer gemessen (Umbau auf Sitzung-je-Kommando): der Port öffnet nach etwa
+40 s, **beantwortet einen Login** — und schweigt danach ein bis zwei Minuten,
+während der Server weiterlädt. Genau das produzierte bei der gehaltenen Sitzung
+die Kette *connected · no answer to the keepalive · disconnected · connected* in
+der Konsole. Ein Kommando in diesem Fenster läuft in den Login-Timeout und sagt
+„BattlEye may still be starting" — mehr ist ehrlich nicht zu holen, und
+Testskripte warten deshalb auf **mehrere** Antworten hintereinander, nicht auf
+die erste.
 
 **7.10 Secret-Masking darf die Ausgabe nicht zerstören** *(in Phase 3 durch Tests gefunden)*
 Ein kurzes Secret blind durch `***` zu ersetzen beschädigt den Log: mit `ADMIN_PASSWORD=x` wurde aus `Update state (0x61)` ein `Update state (0***61)` — und **dadurch** griff die Fortschritts-Erkennung nicht mehr, weil ihr Muster auf der maskierten Zeile lief. Zwei Konsequenzen: (a) für SteamCMD werden nur Steam-Secrets maskiert, nicht das Panel-Passwort, das dort ohnehin nie auftaucht; (b) Secrets unter vier Zeichen werden übersprungen — sie wären ohnehin nicht schützbar, sondern würden nur ihre Position verraten. Steam-Passwörter haben mindestens 8, Guard-Codes 5 Zeichen.
@@ -932,7 +959,7 @@ Streng sequenziell. Phase 3 und 4 tragen das Hauptrisiko (externe Prozesse, Stea
   - [x] Mod deaktivieren → verschwindet aus den Startparametern
   - [x] Typwechsel Client→Server → Key wird wieder entfernt, Mod wandert auf `-serverMod=`
   - [x] `serverDZ.cfg` ändern → Backup vorhanden, `class Missions` und Kommentare unversehrt
-  - [x] RCON verbindet sich nach dem Start von selbst, `players` antwortet, Lock/Unlock laufen durch
+  - [x] RCON verbindet sich für das Kommando selbst, `players` antwortet, Lock/Unlock laufen durch
   - [x] Kommando und Antwort erscheinen in der Live-Konsole, nicht nur im eigenen Tab
   - [x] Falsches RCON-Passwort → Fehlermeldung statt Loginschleife
   - [x] Schedule feuert zur eingetragenen Minute, Kette bricht bei der ersten fehlgeschlagenen Aktion ab

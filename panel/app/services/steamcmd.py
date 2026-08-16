@@ -97,24 +97,34 @@ class SteamCmdService:
     def update_server(self, validate: bool = False) -> Job:
         return self._start_app_update("update", "Update server files", validate=validate)
 
-    def download_workshop_item(self, job: Job, workshop_id: int | str) -> bool:
-        """Download one workshop item inside an *existing* job.
+    def download_workshop_items(self, job: Job, workshop_ids: list) -> bool:
+        """Download workshop items inside an *existing* job - all in one run.
 
-        Public because the mod service runs several downloads in one job: the
-        operator wants one output log for "update all mods", not one job per mod
-        queueing behind the exclusive slot.
+        One invocation for the whole list, not one per item. Every SteamCMD
+        start is a fresh Steam login, and a handful of logins in a row is what
+        makes Steam answer "rate limit exceeded". It is also most of the wall
+        clock: logging in costs more than fetching a mod that has not changed.
 
-        force_install_dir points at the Steam home, so the item lands in
+        force_install_dir points at the Steam home, so the items land in
         Paths.workshop. Without it the destination depends on where SteamCMD
         itself was installed, which is not something the panel should guess.
         """
+        if not workshop_ids:
+            return True
+
         args = [
             self.binary,
             "+force_install_dir", str(self.settings.paths.steam),
             *self._login_args(),
-            "+workshop_download_item", str(self.settings.WORKSHOP_APP_ID), str(workshop_id),
-            "+quit",
         ]
+        for workshop_id in workshop_ids:
+            args += [
+                "+workshop_download_item",
+                str(self.settings.WORKSHOP_APP_ID),
+                str(workshop_id),
+            ]
+        args.append("+quit")
+
         self._run(job, args, expect_success=True)
         return job.state is not JobState.FAILED and not job.cancelled
 

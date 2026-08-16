@@ -147,12 +147,12 @@
 
     <span class="vr mx-2 d-none d-sm-inline"></span>
 
-    {# Locking goes over RCON, so both buttons follow the RCON session rather
-       than the server state - a running server without RCON cannot do this. #}
+    {# Locking goes over RCON, which the panel opens for the click itself. Both
+       buttons therefore need a running server and a password, nothing more. #}
     <button class="btn btn-outline-warning" data-server-action="lock"
-            {% if not status.rcon.connected %}disabled{% endif %}>Lock</button>
+            {% if not status.rcon.ready %}disabled{% endif %}>Lock</button>
     <button class="btn btn-outline-warning" data-server-action="unlock"
-            {% if not status.rcon.connected %}disabled{% endif %}>Unlock</button>
+            {% if not status.rcon.ready %}disabled{% endif %}>Unlock</button>
 
     <span class="vr mx-2 d-none d-sm-inline"></span>
 
@@ -200,9 +200,9 @@
     <form class="input-group mt-3" id="console-form">
       <input class="form-control" id="console-input" spellcheck="false" autocomplete="off"
              placeholder="RCON command, e.g. players"
-             {% if not status.rcon.connected %}disabled{% endif %}>
+             {% if not status.rcon.ready %}disabled{% endif %}>
       <button class="btn btn-primary" type="submit" id="console-send"
-              {% if not status.rcon.connected %}disabled{% endif %}>Send</button>
+              {% if not status.rcon.ready %}disabled{% endif %}>Send</button>
     </form>
     {# The RCON state belongs to the input, not to the buttons above: it is
        what decides whether typing here does anything. #}

@@ -54,6 +54,28 @@ SNAPSHOT_HOST = "dayz"
 
 STATE_FILE = "backup.json"
 KEY_FILE = "backup_key"
+
+# What the download menu offers besides the whole snapshot. One table, read by
+# the page to build the menu and by the route to decide whether the answer is a
+# tar or the file itself - so the two cannot disagree about what is on offer.
+DOWNLOAD_PARTS = (
+    {"path": "mpmissions", "label": "mpmissions", "hint": "Map and persistence",
+     "archive": True},
+    {"path": "profiles", "label": "profiles", "hint": "Server logs",
+     "archive": True},
+    {"path": "serverDZ.cfg", "label": "serverDZ.cfg", "hint": "Server config",
+     "archive": False},
+    {"path": "ban.txt", "label": "ban.txt", "hint": "Bans", "archive": False},
+    {"path": "whitelist.txt", "label": "whitelist.txt", "hint": "Whitelist",
+     "archive": False},
+)
+
+_PARTS_BY_PATH = {part["path"]: part for part in DOWNLOAD_PARTS}
+
+
+def download_part(subpath: str) -> dict | None:
+    """The offered part a download path names, or None for anything else."""
+    return _PARTS_BY_PATH.get((subpath or "").strip().strip("/"))
 CACHE_DIR = "restic-cache"
 
 MAX_EXCLUDES = 40
@@ -501,18 +523,26 @@ class BackupService:
             return empty
         return {"size": raw.get("total_size", 0), "count": raw.get("snapshots_count", 0)}
 
-    def dump(self, snapshot_id: str, subpath: str = ""):
-        """A snapshot as a tar stream, straight out of restic.
+    def dump(self, snapshot_id: str, subpath: str = "", archive: bool = True):
+        """A snapshot, or part of one, straight out of restic.
 
         Piped through rather than written to a file first: a snapshot is
         gigabytes, and building an archive on disk to hand it out would need
         that space twice at the exact moment someone is worried about it.
+
+        A single file comes out as itself. Wrapping serverDZ.cfg in a tar would
+        mean unpacking two kilobytes to read them.
         """
         self._check_id(snapshot_id)
         path = self._inside_source(subpath)
 
+        command = [self.binary, "dump"]
+        if archive:
+            command += ["--archive", "tar"]
+        command += [snapshot_id, str(path)]
+
         return subprocess.Popen(
-            [self.binary, "dump", "--archive", "tar", snapshot_id, str(path)],
+            command,
             env=self._env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

@@ -102,8 +102,12 @@ class Schedule:
     cron: str
     actions: tuple[Action, ...]
     enabled: bool = True
+    # Whether the entry fires while the server is down. A backup or an update
+    # is happy either way; a restart chain has nothing to restart.
+    run_when_stopped: bool = True
     last_run: float | None = None
     last_result: str = ""
+    # True ran, False failed, None fired but was skipped.
     last_ok: bool | None = None
 
     def to_dict(self) -> dict:
@@ -113,6 +117,7 @@ class Schedule:
             "cron": self.cron,
             "actions": [action.to_dict() for action in self.actions],
             "enabled": self.enabled,
+            "run_when_stopped": self.run_when_stopped,
             "last_run": self.last_run,
             "last_result": self.last_result,
             "last_ok": self.last_ok,
@@ -224,6 +229,7 @@ class ScheduleStore:
                     cron=" ".join(str(entry.get("cron", "")).split()),
                     actions=parse_actions(entry.get("actions")),
                     enabled=bool(entry.get("enabled", True)),
+                    run_when_stopped=bool(entry.get("run_when_stopped", True)),
                     last_run=entry.get("last_run"),
                     last_result=str(entry.get("last_result", "")),
                     last_ok=entry.get("last_ok"),
@@ -258,7 +264,7 @@ class ScheduleStore:
             self._write()
         return True
 
-    def record_run(self, schedule_id: str, result: str, ok: bool) -> bool:
+    def record_run(self, schedule_id: str, result: str, ok: bool | None) -> bool:
         """Write back the outcome, and nothing else.
 
         A chain with delays runs for minutes, and the entry can be edited or
@@ -281,12 +287,13 @@ class ScheduleStore:
 class ScheduleService:
     """Keeps APScheduler in step with the stored entries."""
 
-    def __init__(self, store: ScheduleStore, runner, audit=None) -> None:
+    def __init__(self, store: ScheduleStore, runner, audit=None, server_up=None) -> None:
         self._store = store
         self._runner = runner
         # Passed in rather than looked up: a cron firing at 4 a.m. has no
         # request and therefore no current_app to reach it through.
         self._audit = audit
+        self._server_up = server_up or (lambda: True)
         self._scheduler = BackgroundScheduler(
             # One entry at a time, and a job that was missed while the panel was
             # busy is dropped rather than fired late: a 4 a.m. restart running
@@ -326,6 +333,7 @@ class ScheduleService:
             cron=self._valid_cron(data.get("cron")),
             actions=parse_actions(data.get("actions")),
             enabled=bool(data.get("enabled", True)),
+            run_when_stopped=bool(data.get("run_when_stopped", True)),
         )
         self._store.put(schedule)
         self._sync(schedule)
@@ -342,6 +350,9 @@ class ScheduleService:
             actions=parse_actions(data.get("actions"))
             if "actions" in data else current.actions,
             enabled=bool(data.get("enabled", current.enabled)),
+            run_when_stopped=bool(
+                data.get("run_when_stopped", current.run_when_stopped)
+            ),
             last_run=current.last_run,
             last_result=current.last_result,
             last_ok=current.last_ok,
@@ -364,6 +375,7 @@ class ScheduleService:
             cron=current.cron,
             actions=current.actions,
             enabled=False,
+            run_when_stopped=current.run_when_stopped,
         )
         self._store.put(copy)
         self._sync(copy)
@@ -457,6 +469,17 @@ class ScheduleService:
         schedule = self._store.get(schedule_id)
         if schedule is None:
             self._unschedule(schedule_id)
+            return
+
+        # Also for a manual run: the entry says it needs a running server, and
+        # a "Run now" that ignored that would test something other than what
+        # fires at four in the morning.
+        if not schedule.run_when_stopped and not self._server_up():
+            detail = "not run: the server is stopped"
+            log.info("Schedule '%s' skipped: the server is stopped", schedule.name)
+            self._store.record_run(schedule.id, detail, None)
+            if self._audit is not None:
+                self._audit.record("schedules.skipped", schedule.name, detail=detail)
             return
 
         # Two entries firing at the same minute would otherwise interleave a

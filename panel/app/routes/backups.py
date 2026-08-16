@@ -22,7 +22,14 @@ from flask import (
 from flask_login import login_required
 
 from ..services.audit import record
-from ..services.backup import BACKUP_KINDS, BackupError, BackupService, parse_settings
+from ..services.backup import (
+    BACKUP_KINDS,
+    DOWNLOAD_PARTS,
+    BackupError,
+    BackupService,
+    download_part,
+    parse_settings,
+)
 from ..services.jobs import JobBusy
 
 bp = Blueprint("backups", __name__, url_prefix="/backups")
@@ -52,6 +59,7 @@ def index():
         error=service.error(),
         current=service.store.current,
         job_kinds=",".join(sorted(BACKUP_KINDS)),
+        download_parts=DOWNLOAD_PARTS,
     )
 
 
@@ -96,8 +104,14 @@ def download(snapshot_id: str):
     service = _service()
     subpath = (request.args.get("path") or "").strip()
 
+    # Whether this comes out as a tar is decided by the table of offered parts,
+    # not by what the query string claims: a single file is handed over as
+    # itself, everything else is packed.
+    part = download_part(subpath)
+    archive = part["archive"] if part else True
+
     try:
-        proc = service.dump(snapshot_id, subpath)
+        proc = service.dump(snapshot_id, subpath, archive=archive)
     except BackupError as exc:
         return jsonify(ok=False, error=str(exc)), 400
 
@@ -116,16 +130,17 @@ def download(snapshot_id: str):
                 proc.kill()
             proc.wait()
 
-    name = f"dayz-{snapshot_id[:8]}"
+    stem = f"dayz-{snapshot_id[:8]}"
     if subpath:
-        name += "-" + subpath.strip("/").replace("/", "-")
+        stem += "-" + subpath.strip("/").replace("/", "-")
+    filename = f"{stem}.tar" if archive else subpath.strip("/").rpartition("/")[2]
 
     record("backups.download", snapshot_id[:8], detail=subpath or "everything")
     return Response(
         generate(),
-        mimetype="application/x-tar",
+        mimetype="application/x-tar" if archive else "application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="{name}.tar"',
+            "Content-Disposition": f'attachment; filename="{filename}"',
             # The size is unknown before restic has finished, so the browser
             # shows a running total instead of a progress bar.
             "X-Accel-Buffering": "no",

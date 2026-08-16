@@ -36,6 +36,7 @@
     error: document.getElementById("file-error"),
     note: document.getElementById("file-note"),
     input: document.getElementById("file-input"),
+    uploadBtn: document.querySelector("[data-file-action='pick']"),
     editor: document.getElementById("file-editor"),
     editorPath: document.getElementById("editor-path"),
     editorState: document.getElementById("editor-state"),
@@ -51,6 +52,8 @@
   };
 
   if (!el.rows) return;
+
+  var UPLOAD_LABEL = el.uploadBtn ? el.uploadBtn.textContent.trim() : "Upload";
 
   // --- dialog --------------------------------------------------------------
 
@@ -127,19 +130,39 @@
   }
 
   function read(r) {
-    if (r.status === 401) {
+    // An expired session fails the CSRF check before the login check, so it
+    // arrives as an HTML 400 rather than a 401. Anything else that is not JSON
+    // is a real answer from something in the way, and reloading over it would
+    // hide it - which is what a proxy's 413 used to do.
+    var html = (r.headers.get("Content-Type") || "").indexOf("json") === -1;
+    if (r.status === 401 || (r.status === 400 && html)) {
       window.location.reload();
       return { ok: false, handled: true };
     }
     return r.json().catch(function () {
-      window.location.reload();
-      return { ok: false, handled: true };
+      return { ok: false, error: nonJson(r.status) };
     });
+  }
+
+  function nonJson(status) {
+    if (status === 413) {
+      return "That was refused as too large before it reached the panel - "
+        + "something in front of it, a reverse proxy, has a smaller limit than "
+        + "MAX_UPLOAD_MB.";
+    }
+    return "The panel answered " + (status || "nothing")
+      + " with something that is not JSON.";
   }
 
   function setError(message) {
     el.error.hidden = !message;
     el.error.textContent = message || "";
+    // The box sits above the listing, which can be several screens long. An
+    // error nobody scrolls back up to is an error nobody sees. Guarded, because
+    // a throw in here would swallow the very message it was scrolling to.
+    if (message && el.error.scrollIntoView) {
+      el.error.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
   }
 
   function setNote(message) {
@@ -282,6 +305,11 @@
     toggle.textContent = "⋯";
     toggle.setAttribute("data-bs-toggle", "dropdown");
     toggle.setAttribute("aria-expanded", "false");
+    // The table scrolls sideways on narrow screens, and `overflow-x: auto`
+    // clips anything that leaves the box - the menu of the last rows came out
+    // as a sliver. Positioned fixed it is placed against the viewport instead,
+    // so it opens over the table rather than inside it.
+    toggle.setAttribute("data-bs-config", '{"popperConfig":{"strategy":"fixed"}}');
     toggle.title = "Actions";
     wrap.appendChild(toggle);
 
@@ -439,14 +467,68 @@
     form.append("path", here);
     Array.prototype.forEach.call(files, function (file) { form.append("files", file); });
 
-    setNote("Uploading ...");
-    send(cfg.uploadUrl, {}, form).then(function (res) {
+    setError("");
+    setNote("Uploading " + bytes(total) + " ...");
+    uploadState("Uploading 0%", true);
+
+    sendUpload(form, uploadState).then(function (res) {
+      uploadState(UPLOAD_LABEL, false);
       if (res.handled) return;
       if (res.listing) render(res.listing);
       // Partial success is a real outcome: one bad name among five uploads
       // must not read as either "all done" or "nothing happened".
       setError(res.ok ? (res.error || "") : (res.error || "The upload failed."));
       setNote(res.ok ? "Uploaded " + res.written.length + " file(s)." : "");
+    });
+  }
+
+  // On the button, because that is where the click was. The note above the
+  // listing is several screens away once one has browsed into a directory, and
+  // a 200 MB upload that says nothing for two minutes reads as a dead button.
+  function uploadState(label, busy) {
+    if (!el.uploadBtn) return;
+    el.uploadBtn.textContent = label;
+    el.uploadBtn.disabled = !!busy;
+  }
+
+  // XMLHttpRequest rather than fetch: an upload over a home connection takes
+  // minutes, and fetch cannot say how far along it got.
+  function sendUpload(form, onState) {
+    return new Promise(function (resolve) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", cfg.uploadUrl);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("X-CSRFToken", cfg.csrf);
+      xhr.setRequestHeader("Accept", "application/json");
+
+      xhr.upload.addEventListener("progress", function (event) {
+        if (!event.lengthComputable) return;
+        onState("Uploading " + Math.floor(event.loaded / event.total * 100) + "%", true);
+      });
+      // The bytes are out; what is left is the panel writing them to disk.
+      xhr.upload.addEventListener("load", function () { onState("Writing ...", true); });
+
+      xhr.addEventListener("load", function () {
+        var html = (xhr.getResponseHeader("Content-Type") || "").indexOf("json") === -1;
+        if (xhr.status === 401 || (xhr.status === 400 && html)) {
+          window.location.reload();
+          resolve({ ok: false, handled: true });
+          return;
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (error) {
+          resolve({ ok: false, error: nonJson(xhr.status) });
+        }
+      });
+      xhr.addEventListener("error", function () {
+        resolve({ ok: false, error: "The panel could not be reached." });
+      });
+      xhr.addEventListener("abort", function () {
+        resolve({ ok: false, error: "The upload was stopped." });
+      });
+
+      xhr.send(form);
     });
   }
 
