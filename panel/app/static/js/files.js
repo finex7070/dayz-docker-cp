@@ -314,6 +314,8 @@
         node.type = "button";
         node.dataset.fileAction = spec.action;
         node.dataset.filePath = entry.path;
+        // Carried so the delete dialog can say what a folder takes with it.
+        if (entry.is_dir) node.dataset.fileDir = "1";
       }
       node.className = "dropdown-item " + (spec.css || "");
       node.textContent = spec.label;
@@ -505,7 +507,11 @@
       ask({
         title: "Delete",
         input: false,
-        help: "Delete \"" + path + "\"? A copy of a file goes to backup/files/ first.",
+        // No copy is kept either way - the Backups page is what a deleted file
+        // comes back from.
+        help: node.dataset.fileDir
+          ? "Delete \"" + path + "\" and everything in it?"
+          : "Delete \"" + path + "\"?",
         okLabel: "Delete",
         danger: true,
       }).then(function (answer) {
@@ -513,8 +519,7 @@
         post(cfg.deleteUrl, { path: path }).then(function (res) {
           handle(res, function () {
             render(res.listing);
-            setNote("Deleted " + res.deleted + (res.kind === "file"
-              ? " (a copy is in backup/files/)" : ""));
+            setNote("Deleted " + res.deleted);
           });
         });
       });
@@ -566,7 +571,8 @@
         title: "Delete selected",
         input: false,
         help: "Delete " + picked.length + " selected entr"
-              + (picked.length === 1 ? "y" : "ies") + "?",
+              + (picked.length === 1 ? "y" : "ies")
+              + "? A folder goes with everything in it.",
         okLabel: "Delete",
         danger: true,
       }).then(function (answer) {

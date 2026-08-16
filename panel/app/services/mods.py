@@ -226,6 +226,9 @@ class ModService:
             entry["key_files"] = entry.pop("keys")
             entry["installed"] = path.is_dir()
             entry["path"] = str(path)
+            # Built here rather than in the template: the search results already
+            # link to the same page, and one of the two would drift.
+            entry["url"] = f"{WORKSHOP_ITEM_URL}{mod.workshop_id}"
             result.append(entry)
         return result
 

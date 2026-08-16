@@ -37,10 +37,6 @@ ARCHIVE_SUFFIX = ".zip"
 SNIFF_BYTES = 8192
 MAX_EDIT_BYTES = 2 * 1024 * 1024
 
-# Backups keep this many copies per file, mirroring the tree so that three
-# different types.xml do not overwrite each other in one flat directory.
-KEEP_BACKUPS = 20
-
 # Rejected in uploaded and created names. The separators would turn one name
 # into a path, and NUL ends it early for anything below Python.
 BAD_NAME_CHARS = ("/", "\\", "\x00")
@@ -71,9 +67,8 @@ class Entry:
 
 
 class FileService:
-    def __init__(self, root: Path, backup_dir: Path) -> None:
+    def __init__(self, root: Path) -> None:
         self._root = root
-        self._backup_dir = backup_dir
 
     @property
     def root(self) -> Path:
@@ -204,11 +199,11 @@ class FileService:
     def write(self, relative: str, text: str) -> None:
         """Save a text file.
 
-        No backup, deliberately: the editor showed the previous contents and
-        the change was made on purpose. Saving a file twice while working on it
-        would otherwise fill /data/backup with copies of the same edit, and
-        bury the copies that do matter - the ones from a delete or an upload,
-        where the old contents disappear without anyone having seen them.
+        Nothing here keeps a copy of what was there before - not on a save, not
+        on an overwrite, not on a delete. The backup directory belongs to the
+        Backups page, which snapshots the whole server directory and stores
+        only what changed; a second scheme alongside it would compete with it
+        for the same disk and be the one nobody remembers to prune.
         """
         path = self.resolve(relative)
         if not path.is_file():
@@ -232,8 +227,6 @@ class FileService:
         target = directory / name
         if target.is_dir():
             raise FileError(f"'{name}' is a directory here.")
-        if target.is_file():
-            self.backup(target)
 
         temp = target.with_name(target.name + ".panel-tmp")
         with temp.open("wb") as handle:
@@ -313,17 +306,15 @@ class FileService:
             raise FileError("That no longer exists.")
 
         if path.is_dir():
-            # A recursive delete of a mod or mission folder is not something to
-            # offer behind a single click; the bind mount is the right tool.
-            if any(path.iterdir()):
-                raise FileError(
-                    "That directory is not empty. Empty it first, or remove it "
-                    "from the host - a recursive delete is not offered here."
-                )
-            path.rmdir()
+            # Recursive, and without copies of what was in it: one file is
+            # cheap to keep, a mod folder is gigabytes. The Backups page is the
+            # net under this, which is why it does not have to be this one.
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                raise FileError(f"That directory could not be removed: {exc}") from exc
             return "directory"
 
-        self.backup(path)
         path.unlink()
         return "file"
 
@@ -395,9 +386,10 @@ class FileService:
     def extract(self, relative: str) -> dict:
         """Unpack a zip where it lies.
 
-        Files it would overwrite are backed up first, the same as an upload -
-        an archive dropped on top of a mission is exactly how someone loses a
-        types.xml they had been editing.
+        Files it overwrites are counted and reported, not copied anywhere: an
+        archive dropped on top of a mission is how someone loses a types.xml
+        they were editing, and being told how many were replaced is the warning
+        that fits in a page that keeps no copies of its own.
         """
         archive = self.resolve(relative)
         if not archive.is_file():
@@ -427,7 +419,6 @@ class FileService:
                     if target.is_dir():
                         raise FileError(f"'{member.filename}' is a directory here.")
                     if target.exists():
-                        self.backup(target)
                         replaced += 1
                     with handle.open(member) as source, target.open("wb") as sink:
                         shutil.copyfileobj(source, sink)
@@ -465,35 +456,6 @@ class FileService:
             raise FileError(f"The archive tries to write outside its folder: {name}")
         return target
 
-    # --- backups -----------------------------------------------------------
-
-    def backup(self, path: Path) -> str | None:
-        """Copy a file into /data/backup, mirroring its place in the tree."""
-        if not path.is_file():
-            return None
-
-        relative = self.relative(path)
-        target_dir = self._backup_dir / "files" / (relative.rpartition("/")[0])
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            target = target_dir / f"{path.name}.{stamp}"
-
-            counter = 1
-            while target.exists():
-                target = target_dir / f"{path.name}.{stamp}-{counter}"
-                counter += 1
-
-            shutil.copy2(path, target)
-        except OSError as exc:
-            # A failed backup must not block the edit: the operator asked to
-            # save, and refusing would be surprising. It is logged instead.
-            log.warning("Could not back up %s: %s", path, exc)
-            return None
-
-        _prune(target_dir, path.name, KEEP_BACKUPS)
-        return str(target)
-
 
 def _members(sources: list[Path]) -> list[tuple[Path, str]]:
     """Every path to pack, with the name it gets inside the archive.
@@ -520,15 +482,6 @@ def _members(sources: list[Path]) -> list[tuple[Path, str]]:
             elif child.is_file():
                 members.append((child, arcname))
     return members
-
-
-def _prune(directory: Path, prefix: str, keep: int) -> None:
-    copies = sorted(directory.glob(f"{prefix}.*"), key=lambda p: p.name, reverse=True)
-    for stale in copies[keep:]:
-        try:
-            stale.unlink()
-        except OSError:
-            pass
 
 
 def check_name(value: str) -> str:
