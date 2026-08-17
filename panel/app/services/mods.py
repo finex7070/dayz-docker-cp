@@ -29,9 +29,11 @@ import re
 import shutil
 import threading
 import time
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -62,6 +64,24 @@ _META_NAME = re.compile(r'^\s*name\s*=\s*"([^"]*)"', re.IGNORECASE | re.MULTILIN
 # Accepts a bare ID, a workshop URL, or anything with ?id= in it.
 _ID_PATTERN = re.compile(r"(?:^|[?&/=])(\d{6,12})(?:$|[^0-9])")
 
+# A mod uploaded by hand has no workshop ID, but everything downstream - the
+# registry, the routes, the buttons - identifies a mod by one. It gets a number
+# from a range Steam cannot reach: published IDs are ten digits today, and the
+# pattern above accepts at most twelve, so nothing that arrives from Steam or
+# from the operator's clipboard can land here.
+LOCAL_ID_BASE = 10 ** 14
+
+# What makes a directory a mod, per the modding basics: the launcher and the
+# server both go by `@Name`, and the PBOs live in `addons` beside it. A folder
+# with neither is somebody's notes, not a mod.
+ADDONS_DIR = "addons"
+
+# The key of the base game. It comes with the server files rather than with a
+# mod, so nothing that rebuilds keys/ from the mod list may take it.
+VANILLA_KEY = "dayz.bikey"
+
+ARCHIVE_SUFFIX = ".zip"
+
 
 class ModError(RuntimeError):
     """Something the operator can fix, reported back to the page."""
@@ -81,6 +101,11 @@ class Mod:
     @property
     def is_client(self) -> bool:
         return self.mod_type == "client"
+
+    @property
+    def is_local(self) -> bool:
+        """Uploaded into the server directory rather than fetched from Steam."""
+        return self.workshop_id >= LOCAL_ID_BASE
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -217,6 +242,7 @@ class ModService:
 
     def list_mods(self) -> list[dict]:
         """Registry entries plus whether the files are actually there."""
+        self.adopt_uploaded()
         result = []
         for mod in self.registry.all():
             path = self.settings.paths.server / mod.dir_name
@@ -226,22 +252,53 @@ class ModService:
             entry["key_files"] = entry.pop("keys")
             entry["installed"] = path.is_dir()
             entry["path"] = str(path)
+            entry["local"] = mod.is_local
             # Built here rather than in the template: the search results already
             # link to the same page, and one of the two would drift.
-            entry["url"] = f"{WORKSHOP_ITEM_URL}{mod.workshop_id}"
+            entry["url"] = "" if mod.is_local else f"{WORKSHOP_ITEM_URL}{mod.workshop_id}"
             result.append(entry)
         return result
 
-    def orphan_dirs(self) -> list[str]:
-        """@directories on disk that no registry entry claims.
+    def adopt_uploaded(self) -> list[Mod]:
+        """Take mod directories the panel did not install into the list.
 
-        Usually a leftover from a mod installed by hand or removed while the
-        panel was down. Naming them beats silently ignoring a directory that
-        still takes up disk space.
+        A mod dropped into `server/` by hand or through the file browser is a
+        mod the operator wants; leaving it out of the list would mean managing
+        it - order, type, keys - by editing the launch parameters instead.
+
+        It comes in **disabled**. Adopting is a discovery, not an instruction:
+        a folder appearing on disk must not put itself on the command line of
+        the next start.
+        """
+        known = {m.dir_name for m in self.registry.all()}
+        adopted = []
+        with self._lock:
+            for path in self.settings.paths.installed_mod_dirs():
+                if path.name in known or not _has_addons(path):
+                    continue
+                mod = Mod(
+                    workshop_id=_local_id(path.name),
+                    name=self._read_mod_name(path) or path.name.lstrip("@"),
+                    dir_name=path.name,
+                    enabled=False,
+                    size_mb=_dir_size_mb(path),
+                    updated_at=path.stat().st_mtime,
+                )
+                log.info("Adopting uploaded mod %s", path.name)
+                self.registry.upsert(mod)
+                adopted.append(mod)
+        return adopted
+
+    def orphan_dirs(self) -> list[str]:
+        """@directories on disk that are in the list of neither mods nor mods.
+
+        What is left after adoption is a directory that looks like a mod by its
+        name and has no `addons` in it - an interrupted upload, or a folder
+        somebody named with an @. Naming it beats silently ignoring it.
         """
         known = {m.dir_name for m in self.registry.all()}
         return sorted(p.name for p in self.settings.paths.installed_mod_dirs()
-                      if p.name not in known)
+                      if p.name not in known and not _has_addons(p))
 
     # --- jobs -------------------------------------------------------------
 
@@ -270,6 +327,14 @@ class ModService:
         if unknown:
             raise ModError(
                 "Not installed: " + ", ".join(str(i) for i in unknown) + "."
+            )
+
+        local = [self.registry.get(i) for i in workshop_ids if i >= LOCAL_ID_BASE]
+        if local:
+            raise ModError(
+                "Uploaded, not from the workshop: "
+                + ", ".join(mod.name for mod in local)
+                + ". Replace the files to update it."
             )
 
         title = (
@@ -337,14 +402,22 @@ class ModService:
         return jobs.start("mod_update", title, runner)
 
     def reinstall(self, workshop_id: int) -> Job:
-        if not self.registry.get(workshop_id):
+        mod = self.registry.get(workshop_id)
+        if not mod:
             raise ModError(f"Mod {workshop_id} is not installed.")
+        if mod.is_local:
+            raise ModError(
+                f"{mod.name} was uploaded, not downloaded - there is nothing to "
+                "fetch it from."
+            )
         return self._download_job(
             "mod_reinstall", f"Reinstall mod {workshop_id}", [workshop_id], wipe=True
         )
 
     def update_all(self) -> Job | None:
-        ids = [m.workshop_id for m in self.registry.all()]
+        # Uploaded mods are left out rather than refused: "Update all" is about
+        # the ones Steam has a newer copy of.
+        ids = [m.workshop_id for m in self.registry.all() if not m.is_local]
         return self.update(ids) if ids else None
 
     # --- launcher mod lists -----------------------------------------------
@@ -384,16 +457,116 @@ class ModService:
         )
         return {"job": job, "added": len(fresh), "skipped": skipped}
 
+    # --- uploads ----------------------------------------------------------
+
+    def install_upload(self, filename: str, stream) -> tuple[list[Mod], str]:
+        """Unpack a zipped mod into the server directory and take it into the list.
+
+        Strict about what it accepts: the archive has to carry the mod folder
+        itself, `@Name/addons/...`. Unpacking loose PBOs into a folder named
+        after the zip would be guessing at what the mod is called, and a mod
+        under the wrong name loads on nobody's server.
+        """
+        if not filename.lower().endswith(ARCHIVE_SUFFIX):
+            raise ModError("A mod is uploaded as a .zip.")
+
+        staged = self.settings.paths.panel / "upload.zip.part"
+        try:
+            with staged.open("wb") as target:
+                shutil.copyfileobj(stream, target)
+            with zipfile.ZipFile(staged) as archive:
+                roots = _mod_roots(archive.namelist())
+                if not roots:
+                    raise ModError(
+                        "No mod in that zip: it needs a folder starting with @ "
+                        "and an addons directory inside it."
+                    )
+                replaced = self._unpack(archive, roots)
+        except zipfile.BadZipFile as exc:
+            raise ModError(f"That is not a readable zip: {exc}") from exc
+        except OSError as exc:
+            raise ModError(f"Could not unpack the upload: {exc}") from exc
+        finally:
+            staged.unlink(missing_ok=True)
+
+        adopted = self.adopt_uploaded()
+        known = {mod.dir_name: mod for mod in self.registry.all()}
+        mods = [known[name] for name in roots if name in known]
+
+        what = ", ".join(sorted(roots))
+        if replaced:
+            message = f"Replaced {what}. It keeps its place in the list."
+        elif adopted:
+            message = f"Added {what}, switched off. Enable it to load it."
+        else:
+            message = f"Unpacked {what}."
+        return mods, message
+
+    def _unpack(self, archive: zipfile.ZipFile, roots: set[str]) -> bool:
+        """Write the mod folders out of the archive, replacing what is there.
+
+        Returns whether anything was replaced. A second upload of the same mod
+        is how one updates it, so the old directory goes first - leaving it
+        would mix two versions in one folder.
+        """
+        server = self.settings.paths.server
+        root_dir = server.resolve()
+
+        # Every path is checked before the first byte is written. The archive
+        # decides where its members land, so it could point out of the tree -
+        # and a zip that tries must not have taken half a mod's place by the
+        # time that is noticed, least of all the place of the mod it replaces.
+        planned = []
+        for member in archive.infolist():
+            name = member.filename.replace("\\", "/")
+            if name.split("/")[0] not in roots:
+                continue
+            destination = (server / name).resolve()
+            if not destination.is_relative_to(root_dir):
+                raise ModError(f"That zip writes outside the server directory: {name}")
+            planned.append((member, destination))
+
+        replaced = False
+        for root in roots:
+            target = server / root
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                replaced = True
+
+        try:
+            for member, destination in planned:
+                if member.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, destination.open("wb") as out:
+                    shutil.copyfileobj(source, out)
+        except (OSError, zipfile.BadZipFile):
+            # Half a mod would be adopted as a whole one on the next page load.
+            for root in roots:
+                shutil.rmtree(server / root, ignore_errors=True)
+            raise
+
+        # Lowercased like a download, and for the same reason: these files come
+        # from the panel's own hand, and DayZ on Linux will not find them
+        # otherwise. Files put there past the panel are left as they are.
+        for root in roots:
+            renamed = _lowercase_tree(server / root)
+            if renamed:
+                log.info("Lowercased %s path(s) in %s", renamed, root)
+        return replaced
+
     def export_modlist(self) -> str:
         """The enabled mods, client and server alike, as a launcher preset.
 
         A disabled mod is not on the command line, so the server does not load
         it - handing it to players would have them install something that is
-        not being run.
+        not being run. An uploaded mod has no workshop entry to point a
+        launcher at, so it cannot go in either.
         """
-        mods = [mod for mod in self.registry.all() if mod.enabled]
+        mods = [mod for mod in self.registry.all() if mod.enabled and not mod.is_local]
         if not mods:
-            raise ModError("There are no enabled mods to export.")
+            raise ModError("There are no enabled workshop mods to export.")
         return render_modlist(
             [ModlistEntry(mod.workshop_id, mod.name) for mod in mods]
         )
@@ -490,7 +663,11 @@ class ModService:
                 updated_at=time.time(),
             )
 
-            mod = replace(mod, keys=self._sync_keys(mod, job.log_line))
+            # Carries the old ownership in so the previous keys are dropped:
+            # a new version can ship a key under a different name.
+            mod = self._apply_keys(
+                replace(mod, keys=existing.keys if existing else ()), job.log_line
+            )
             self.registry.upsert(mod)
 
         self.sync_launch_settings()
@@ -533,8 +710,24 @@ class ModService:
 
     # --- keys -------------------------------------------------------------
 
+    def _apply_keys(self, mod: Mod, note=lambda _line: None) -> Mod:
+        """Bring server/keys in line with what this mod is now.
+
+        Run whenever the answer could have changed - a download, a type switch,
+        the enable switch, or the operator asking for it. The old keys go
+        first: a mod that no longer wants them, or brought differently named
+        ones, must not leave the previous set behind.
+        """
+        self._drop_keys(mod)
+        return replace(mod, keys=self._sync_keys(mod, note))
+
     def _sync_keys(self, mod: Mod, note) -> tuple[str, ...]:
-        """Put a client mod's .bikey into server/keys, keep a server mod's out.
+        """Put a client mod's .bikey into server/keys, keep the others out.
+
+        A key is in keys/ exactly while the mod that ships it is **enabled and
+        a client mod**. Disabled means not on the command line, so no client
+        loads it and nothing should present its signature; a server mod is not
+        loaded by clients either. Both would only widen what the server accepts.
 
         Returns the key file names now owned by this mod, so removing it later
         can take exactly its keys and nothing else.
@@ -545,12 +738,14 @@ class ModService:
 
         found = sorted(p for p in source_dir.rglob("*.bikey") if p.is_file())
 
-        if not mod.is_client:
+        if not mod.is_client or not mod.enabled:
             if found:
-                note(
-                    f"[panel] {len(found)} key(s) not installed: a server mod runs "
-                    "on the server only, so no client presents its signature"
+                reason = (
+                    "it is switched off" if not mod.enabled else
+                    "a server mod runs on the server only, so no client "
+                    "presents its signature"
                 )
+                note(f"[panel] {len(found)} key(s) not installed: {reason}")
             return ()
 
         installed = []
@@ -595,22 +790,72 @@ class ModService:
             if mod.mod_type == mod_type:
                 return mod
 
-            # Drop the old keys first: switching to a server mod has to take
-            # them back out of the server's keys directory.
-            self._drop_keys(mod)
-            updated = replace(mod, mod_type=mod_type, keys=())
-            updated = replace(updated, keys=self._sync_keys(updated, lambda _m: None))
+            updated = self._apply_keys(replace(mod, mod_type=mod_type))
             self.registry.upsert(updated)
 
         self.sync_launch_settings()
         return updated
 
     def set_enabled(self, workshop_id: int, enabled: bool) -> Mod:
+        """Switch a mod on or off - and move its keys with it.
+
+        Enabling is the moment a client mod's key starts to matter: it goes on
+        the command line, players load it, and the server checks its signature
+        against keys/. Switching off takes the key back out, because nothing
+        loads the mod any more.
+        """
         with self._lock:
-            updated = replace(self._require(workshop_id), enabled=bool(enabled))
+            updated = self._apply_keys(
+                replace(self._require(workshop_id), enabled=bool(enabled))
+            )
             self.registry.upsert(updated)
         self.sync_launch_settings()
         return updated
+
+    def sync_all_keys(self) -> str:
+        """Empty server/keys and fill it from the enabled client mods.
+
+        The automatic moments keep keys/ correct as mods come and go. This is
+        for when it went wrong anyway: a key deleted in the file browser, mod
+        files replaced by hand, a directory restored from an older backup, or
+        keys left behind by a panel version that did not clean up after itself.
+        Rebuilding beats reconciling - the enabled client mods *are* the answer.
+
+        The DayZ key is not touched. It comes with the server files, belongs to
+        no mod, and removing it would reject every player until the files are
+        validated again.
+        """
+        keys_dir = self.settings.paths.keys
+        removed, without = 0, []
+
+        with self._lock:
+            keys_dir.mkdir(parents=True, exist_ok=True)
+            for key in sorted(keys_dir.glob("*.bikey")):
+                if key.name.lower() == VANILLA_KEY:
+                    continue
+                try:
+                    key.unlink()
+                    removed += 1
+                except OSError as exc:
+                    log.warning("Could not remove key %s: %s", key.name, exc)
+
+            installed = set()
+            for mod in self.registry.all():
+                # keys=() because the directory is already empty: there is
+                # nothing left of the old set to take back out.
+                fresh = self._sync_keys(replace(mod, keys=()), lambda _line: None)
+                self.registry.upsert(replace(mod, keys=fresh))
+                installed.update(fresh)
+                if mod.enabled and mod.is_client and not fresh:
+                    without.append(mod.name)
+
+        message = (
+            f"server/keys rebuilt: {len(installed)} key(s) from the enabled "
+            f"client mods, {removed} removed."
+        )
+        if without:
+            message += " Without a key of their own: " + ", ".join(without) + "."
+        return message
 
     def move(self, workshop_id: int, offset: int) -> None:
         self._require(workshop_id)
@@ -855,6 +1100,53 @@ def _lowercase_tree(root: Path) -> int:
             except OSError as exc:
                 log.warning("Could not rename %s: %s", source, exc)
     return renamed
+
+
+def _mod_roots(names: list[str]) -> set[str]:
+    """The `@Name` folders in an archive that actually hold a mod.
+
+    Same test as on disk, one level up: a top folder starting with @, with an
+    addons directory in it. Anything else in the zip - a readme beside it, a
+    second folder without addons - is left where it is.
+    """
+    roots = set()
+    for raw in names:
+        parts = [part for part in raw.replace("\\", "/").split("/") if part]
+        if len(parts) < 2 or not parts[0].startswith("@"):
+            continue
+        if parts[1].lower() == ADDONS_DIR:
+            roots.add(parts[0])
+    return roots
+
+
+def _has_addons(path: Path) -> bool:
+    """`@Name/addons/` - the two marks of a mod directory.
+
+    Case-insensitive on the addons folder: mods are built on Windows, and one
+    that arrives as `Addons` is still a mod. The server needs it lowercased,
+    which is a separate matter and says so on the page.
+    """
+    return any(
+        child.is_dir() and child.name.lower() == ADDONS_DIR
+        for child in _children(path)
+    )
+
+
+def _children(path: Path) -> list[Path]:
+    try:
+        return list(path.iterdir())
+    except OSError:
+        return []
+
+
+def _local_id(dir_name: str) -> int:
+    """A stable ID for an uploaded mod, derived from its directory name.
+
+    Derived rather than counted up: the same folder has to come back with the
+    same ID after a restart, and the folder name is the only thing about it
+    that is guaranteed to be there.
+    """
+    return LOCAL_ID_BASE + zlib.crc32(dir_name.encode("utf-8"))
 
 
 def _dir_size_mb(path: Path) -> float:

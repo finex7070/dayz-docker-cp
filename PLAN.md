@@ -324,7 +324,17 @@ Beim Hinzufügen (und jederzeit änderbar) wählt der Benutzer, in welche Startp
 
 Der Grund für die Unterscheidung beim Key: Mit `verifySignatures = 2` prüft der Server die von **Clients** geladenen Mods gegen die Dateien in `keys/`. Fehlt der Key eines Client-Mods, wird jeder Spieler beim Verbinden abgewiesen — das ist die häufigste Ursache für „Mod installiert, aber niemand kommt rein". Ein Server-Mod wird von keinem Client geladen, sein Key gehört deshalb nicht in `keys/`: er würde dort nur unnötig zusätzliche Signaturen erlauben.
 
-Daraus folgt für den Typwechsel: Wird ein Mod von Server- auf Client-Mod umgestellt, kopiert das Panel den Key nach; in der Gegenrichtung entfernt es ihn wieder. Beim **Entfernen** eines Mods wird der Ordner samt zugehöriger Keys gelöscht.
+Daraus ergibt sich eine Invariante, an der alles andere hängt: **ein Key liegt genau so lange in `keys/`, wie der Mod, der ihn mitbringt, aktiviert *und* Client-Mod ist.** Deaktiviert heißt nicht auf der Kommandozeile, also lädt ihn kein Client, also hat seine Signatur dort nichts zu suchen — dasselbe Argument wie beim Server-Mod.
+
+Abgeglichen wird deshalb an jeder Stelle, an der sich die Antwort ändern kann: nach jedem Download, beim Typwechsel und beim Umlegen des Aktiv-Schalters.
+
+Dazu **ein** Knopf über der Liste, *Sync keys*, der `keys/` nicht abgleicht, sondern **neu baut**: leeren, dann von jedem aktivierten Client-Mod neu kopieren. Er ist für die Fälle, die das Panel nicht mitbekommt — ein im Dateibrowser gelöschter Key, von Hand ausgetauschte Moddateien, ein aus einem älteren Backup zurückgeholtes `keys/`, Reste einer Panel-Version, die noch nicht aufgeräumt hat. Neu bauen statt abgleichen, weil die aktivierten Client-Mods die Antwort *sind*; ein Abgleich müsste raten, woher ein unbekannter Key kommt. Weil er löscht, fragt er vorher nach und sagt hinterher, was dabei herauskam — auch, welche Mods gar keinen Key mitbringen, was sonst niemand sieht, bis sich der erste Spieler nicht verbinden kann.
+
+**`dayz.bikey` bleibt liegen.** Der Key des Basisspiels kommt mit den Serverdateien und gehört zu keinem Mod; ihn mit wegzuräumen hieße, jeden Spieler abzuweisen, bis die Serverdateien erneut validiert werden.
+
+Vor dem Kopieren werden immer erst die bisherigen Keys des Eintrags entfernt (außer ein anderer installierter Mod bringt denselben mit): eine neue Version kann ihren Key unter anderem Namen mitbringen, und der alte bliebe sonst liegen. Beim **Entfernen** eines Mods wird der Ordner samt zugehöriger Keys gelöscht.
+
+Bestehende Einträge werden dabei nicht beim Start durchgeputzt: ein deaktivierter Mod, dessen Key aus der Zeit vor dieser Regel noch in `keys/` liegt, behält ihn, bis ihn jemand anfasst. Beim Start Dateien zu löschen, um die man nicht gebeten hat, wäre die unangenehmere Überraschung — *Sync keys* räumt es auf, wenn der Betreiber es will.
 
 Das Zielverzeichnis ist `keys/` — falls die Serverdateien es in anderer Schreibweise mitbringen, wird das vorhandene Verzeichnis verwendet statt ein zweites anzulegen (case-sensitives Dateisystem).
 
@@ -334,7 +344,19 @@ Das Zielverzeichnis ist `keys/` — falls die Serverdateien es in anderer Schrei
 - **Update** einzeln oder „alle"; **Reinstall** löscht den Zielordner vorher; **Entfernen** löscht Ordner + Keys (mit Bestätigung), lässt den Workshop-Cache aber stehen, damit eine Neuinstallation schnell bleibt
 - **Mods beim Start aktualisieren** (Settings → General, Default aus): aktualisiert vor jedem Serverstart alle installierten Mods — ausgeführt **nach** dem `app_update` der Serverdateien, da ein Serverupdate ohnehin passende Mods verlangt und die Reihenfolge sonst zu einem kurzzeitig inkonsistenten Stand führt (siehe §6.5a)
 - Warnhinweis im UI, wenn ein Client-Mod ohne auffindbaren Key installiert wurde — der Server startet dann zwar, weist aber alle Spieler ab
-- Ordner der Form `@*`, die kein Registry-Eintrag beansprucht, werden benannt statt stillschweigend übergangen — sie stehen auf keiner Startparameter-Kette
+
+#### Hochgeladene Mods
+
+Nicht jeder Mod kommt aus dem Workshop: private Mods, selbst gebaute, oder solche, die der Betreiber als Zip in den Dateibrowser lädt. Erkannt wird ein Mod an dem, was die [Modding Basics](https://community.bistudio.com/wiki/DayZ:Modding_Basics) vorgeben — Ordner beginnt mit `@` und enthält `addons/` (Groß-/Kleinschreibung egal, denn gebaut wird auf Windows). Alles andere unter `@*` bleibt der Hinweis „kein Mod": eine abgebrochene Übertragung oder ein Ordner, der zufällig mit @ anfängt.
+
+Zwei Wege dorthin: die Karte **Upload a mod** nimmt eine Zip entgegen, und der Dateibrowser nimmt ohnehin alles. Die Zip muss den `@Name`-Ordner selbst enthalten — lose PBOs in einen nach der Zip benannten Ordner zu packen hieße, den Modnamen zu raten, und ein Mod unter falschem Namen lädt auf keinem Server. Vor dem ersten geschriebenen Byte wird jeder Pfad im Archiv geprüft: ein Zip-Eintrag, der aus dem Serververzeichnis zeigt, wird abgelehnt, bevor er einen bestehenden Mod verdrängen kann. Eine zweite Zip mit demselben Ordnernamen ersetzt den Mod — so aktualisiert man einen hochgeladenen — und der Eintrag behält dabei Platz, Typ und Zustand. Was das Panel selbst auspackt, schreibt es klein: es sind seine eigenen Dateien, dieselbe Regel wie beim Download.
+
+Ein so gefundener Mod wird beim Aufbau der Liste **übernommen** und ist danach ein Eintrag wie jeder andere: Typ, Reihenfolge, Keys, Löschen. Zwei Entscheidungen dazu:
+
+- **Er kommt deaktiviert herein.** Ein Ordner, der auf der Platte auftaucht, darf sich nicht selbst auf die Kommandozeile des nächsten Starts setzen — das Übernehmen ist ein Fund, keine Anweisung.
+- **Die ID wird abgeleitet, nicht gezählt.** Registry, Routen und Knöpfe kennen einen Mod an seiner Workshop-ID; ein hochgeladener hat keine. Er bekommt `10^14 + crc32(ordnername)` — ein Bereich, den Steam nicht erreicht (Published IDs sind heute zehnstellig, das Eingabemuster nimmt höchstens zwölf), und derselbe Ordner kommt nach einem Neustart mit derselben ID zurück. *Update* und *Reinstall* werden für ihn gar nicht erst angeboten: es gibt nichts, wovon man ihn holen könnte.
+
+Kleingeschrieben wird bei einem hochgeladenen Mod **nichts**. Das Panel schreibt beim Download die Dateien um, weil es sie selbst dorthin gelegt hat; fremde Dateien beim Betrachten einer Seite umzubenennen wäre eine Änderung, um die niemand gebeten hat. Die Seite sagt stattdessen, dass DayZ unter Linux Kleinschreibung braucht.
 
 #### Suche: nur mit API-Key
 

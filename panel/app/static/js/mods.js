@@ -16,8 +16,9 @@
 
   var el = {
     query: document.getElementById("mod-query"),
-    type: document.getElementById("mod-type"),
-    lookup: document.getElementById("mod-lookup"),
+    installNote: document.getElementById("install-note"),
+    modzip: document.getElementById("modzip-file"),
+    modzipNote: document.getElementById("modzip-note"),
     search: document.getElementById("mod-search"),
     results: document.getElementById("mod-results"),
     clear: document.getElementById("mod-clear"),
@@ -73,11 +74,17 @@
     });
   }
 
+  // Each card answers in its own box: what went wrong belongs next to the
+  // field it was about, not in the job output further down the page.
+  function note(node, message, bad) {
+    if (!node) return;
+    node.hidden = !message;
+    node.textContent = message || "";
+    node.className = "alert mt-3 mb-0 " + (bad ? "alert-danger" : "alert-secondary");
+  }
+
   function modlistNote(message, bad) {
-    if (!el.modlistNote) return;
-    el.modlistNote.hidden = !message;
-    el.modlistNote.textContent = message || "";
-    el.modlistNote.className = "alert mt-3 " + (bad ? "alert-danger" : "alert-secondary");
+    note(el.modlistNote, message, bad);
   }
 
   function showError(message) {
@@ -220,44 +227,51 @@
 
   // --- add and search --------------------------------------------------------
 
-  function renderLookup(item) {
-    el.lookup.hidden = false;
-    el.lookup.className = "alert alert-secondary mt-3";
-    el.lookup.innerHTML = "";
-
-    var head = document.createElement("div");
-    head.className = "d-flex gap-3 align-items-start";
-    head.appendChild(thumbnail(item));
-
-    var title = document.createElement("a");
-    title.href = item.url;
-    title.target = "_blank";
-    title.rel = "noopener noreferrer";
-    title.className = "fw-bold";
-    title.textContent = item.title;
-    head.appendChild(title);
-    el.lookup.appendChild(head);
-
-    var meta = document.createElement("div");
-    meta.className = "small text-secondary";
-    meta.textContent =
-      "ID " + item.workshop_id +
-      " · " + item.size_mb + " MB" +
-      (item.installed ? " · already installed" : "");
-    el.lookup.appendChild(meta);
-
-    if (item.description) {
-      var desc = document.createElement("div");
-      desc.className = "small mt-1";
-      desc.textContent = item.description;
-      el.lookup.appendChild(desc);
+  // Uploading a mod is multipart, so it cannot go through post(): the browser
+  // has to set the boundary itself. That also means the retry after a
+  // confirmation appends the flag to the form rather than to a JSON body.
+  function uploadMod(button) {
+    var file = el.modzip && el.modzip.files[0];
+    if (!file) {
+      note(el.modzipNote, "Choose a zipped mod first.", true);
+      return;
     }
-  }
 
-  function lookupError(message) {
-    el.lookup.hidden = false;
-    el.lookup.className = "alert alert-danger mt-3";
-    el.lookup.textContent = message;
+    function attempt(force) {
+      var body = new FormData();
+      body.append("mod", file);
+      if (force) body.append("force", "1");
+      return fetch("/mods/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": CSRF, Accept: "application/json" },
+        body: body,
+      }).then(readJson);
+    }
+
+    button.disabled = true;
+    note(el.modzipNote, "Uploading " + file.name + " ...");
+    attempt(false).then(function (res) {
+      if (res.needs_confirm) {
+        if (!window.confirm(res.error)) return { ok: false, cancelled: true };
+        return attempt(true);
+      }
+      return res;
+    }).then(function (res) {
+      button.disabled = false;
+      if (res.handled) return;
+      if (res.cancelled) {
+        note(el.modzipNote, "");
+        return;
+      }
+      if (!res.ok) {
+        note(el.modzipNote, res.error || "The mod could not be unpacked.", true);
+        return;
+      }
+      el.modzip.value = "";
+      note(el.modzipNote, res.message || "");
+      afterChange(res);
+    });
   }
 
   function renderResults(data) {
@@ -329,7 +343,6 @@
       button.disabled = true;
       send("/mods/install", {
         query: String(item.workshop_id),
-        mod_type: el.type.value,
       }).then(afterChange);
     });
     text.appendChild(button);
@@ -405,23 +418,22 @@
     var id = row ? row.dataset.modId : null;
     event.preventDefault();
 
-    if (action === "lookup") {
-      post("/mods/lookup", { query: el.query.value }).then(function (res) {
-        if (res.handled) return;
-        if (res.ok) renderLookup(res.item);
-        else lookupError(res.error || "Lookup failed.");
-      });
+    if (action === "install") {
+      target.disabled = true;
+      note(el.installNote, "");
+      // No type: a mod arrives as a client mod, and the row it lands in is
+      // where one says otherwise.
+      send("/mods/install", { query: el.query.value })
+        .then(function (res) {
+          target.disabled = false;
+          if (res.ok === false && res.error) note(el.installNote, res.error, true);
+          else afterChange(res);
+        });
       return;
     }
 
-    if (action === "install") {
-      target.disabled = true;
-      send("/mods/install", { query: el.query.value, mod_type: el.type.value })
-        .then(function (res) {
-          target.disabled = false;
-          if (res.ok === false && res.error) lookupError(res.error);
-          else afterChange(res);
-        });
+    if (action === "upload") {
+      uploadMod(target);
       return;
     }
 
@@ -478,6 +490,15 @@
       return;
     }
 
+    if (action === "sync-keys") {
+      // It empties the directory before it fills it, so it asks first.
+      if (!window.confirm(
+        "Rebuild server/keys? Every key but the DayZ one is removed and copied "
+        + "back from the mods that are switched on.")) return;
+      send("/mods/keys/sync").then(afterChange);
+      return;
+    }
+
     if (action === "cancel" && jobId) {
       post("/jobs/" + jobId + "/cancel").then(poll);
       return;
@@ -507,9 +528,9 @@
     if (target.dataset.modAction === "type") {
       post("/mods/" + id + "/type", { mod_type: target.value }).then(afterChange);
     } else if (target.dataset.modAction === "enabled") {
-      post("/mods/" + id + "/enabled", { enabled: target.checked }).then(function (res) {
-        if (res.ok === false && res.error) showError(res.error);
-      });
+      // Reloads like every other change: switching a mod on moves its keys,
+      // and the key count in the row would otherwise still show the old one.
+      post("/mods/" + id + "/enabled", { enabled: target.checked }).then(afterChange);
     }
   });
 
@@ -517,7 +538,7 @@
     el.query.addEventListener("keydown", function (event) {
       if (event.key === "Enter") {
         event.preventDefault();
-        document.querySelector('[data-mod-action="lookup"]').click();
+        document.querySelector('[data-mod-action="install"]').click();
       }
     });
   }
