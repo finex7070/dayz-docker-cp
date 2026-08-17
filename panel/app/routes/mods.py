@@ -11,6 +11,7 @@ from flask import (
     Blueprint,
     Response,
     current_app,
+    flash,
     jsonify,
     render_template,
     request,
@@ -253,6 +254,48 @@ def set_enabled(workshop_id: int):
     return jsonify(ok=True, enabled=mod.enabled)
 
 
+@bp.post("/upload")
+@login_required
+def upload():
+    """Take a zipped mod into the server directory."""
+    uploaded = request.files.get("mod")
+    if uploaded is None or not uploaded.filename:
+        return jsonify(ok=False, error="No file was selected."), 400
+
+    blocked = _running_server_warning("upload")
+    if blocked:
+        return blocked
+
+    name = uploaded.filename
+    try:
+        mods, message = _service().install_upload(name, uploaded.stream)
+    except ModError as exc:
+        record("mods.upload", name, ok=False, detail=str(exc))
+        return jsonify(ok=False, error=str(exc)), 400
+
+    record("mods.upload", name, detail=", ".join(mod.dir_name for mod in mods))
+    return jsonify(ok=True, message=message,
+                   mods=[mod.dir_name for mod in mods])
+
+
+@bp.post("/keys/sync")
+@login_required
+def sync_keys():
+    """Rebuild server/keys from the enabled client mods."""
+    try:
+        message = _service().sync_all_keys()
+    except ModError as exc:
+        record("mods.keys", ok=False, detail=str(exc))
+        return jsonify(ok=False, error=str(exc)), 400
+
+    record("mods.keys", detail=message)
+    # Flashed rather than returned into the page: the answer arrives, the page
+    # reloads to show the new key counts, and a message in the response would
+    # go with it.
+    flash(message, "success")
+    return jsonify(ok=True, message=message)
+
+
 @bp.post("/<int:workshop_id>/move")
 @login_required
 def move(workshop_id: int):
@@ -301,8 +344,10 @@ def _running_server_warning(action: str):
     is the kind of fault that shows up much later as a crash, so the operator
     has to see the warning before insisting.
     """
-    payload = request.get_json(silent=True) or {}
-    if payload.get("force"):
+    # An upload arrives as multipart, everything else as JSON - the answer to
+    # the confirmation comes back the same way it was asked.
+    payload = request.get_json(silent=True) or request.form
+    if payload and payload.get("force"):
         return None
 
     if not current_app.extensions["server"].running:

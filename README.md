@@ -36,9 +36,11 @@ Delete the container, keep the volume, and your server is unchanged.
   panel remembers when the files were last updated and last checked.
 - **🧩 Mod management** — Install workshop mods by ID, URL or search, set each
   one as a client mod (`-mod`) or server-only mod (`-serverMod`), reorder the
-  load order, update, reinstall or remove. Signature keys are copied along
-  automatically. A DayZ Launcher `modlist.html` can be imported, and exported
-  again for your players.
+  load order, update, reinstall or remove. Signature keys follow the mod: a
+  `.bikey` is in `server/keys` while the mod is enabled and a client mod, and
+  *Sync keys* rebuilds the directory when it drifted. A mod uploaded into
+  `server/` by hand joins the same list. A DayZ Launcher `modlist.html` can be
+  imported, and exported again for your players.
 - **⚙️ Settings, not text editors** — Launch parameters and the important
   `serverDZ.cfg` values as real forms with validation. Five values are written
   for you before every start, so they can never drift: `steamQueryPort`, the
@@ -84,11 +86,14 @@ and the server's own output streaming in — with an RCON prompt underneath it.
 
 ### Mods
 
-Workshop mods by ID, URL or search. Each one is a client mod or a server-only
-mod, and the order in this list is the order on the command line. A DayZ
-Launcher preset (`modlist.html`) imports as client mods; the export writes the
-enabled mods, client and server, into a file players can drop into their
-launcher.
+Three ways in, side by side: a workshop ID or URL, a zipped mod folder, or a
+DayZ Launcher preset. Each mod is a client mod or a server-only mod, and the
+order in this list is the order on the command line. A mod that was not
+downloaded but uploaded — a `@Name` folder with an `addons` directory in it —
+appears in the same list, marked *local* and disabled until you say otherwise.
+A preset imports as client mods; the export writes the enabled workshop mods,
+client and server, into a file players can drop into their launcher — an
+uploaded mod has no workshop page to point at, so it stays out.
 
 ![Mods](docs/img/mods.png)
 
@@ -313,6 +318,27 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.2.0** — Uploaded mods are managed like any other. A folder in `server/`
+that starts with `@` and has an `addons` directory in it is a mod, so it joins
+the list with a type, a place in the load order and its keys — disabled, so a
+folder appearing on disk never puts itself on the next command line. Update and
+Reinstall are not offered for one: there is nothing to fetch it from, and the
+mod list export leaves it out for the same reason.
+
+The top of the page is three cards now — install from the workshop, upload a
+zipped mod, or import and export a launcher preset. The upload takes the
+`@Name` folder as it is, lowercases the names for Linux and puts the mod
+straight into the list; a second upload of the same folder replaces it.
+
+Signature keys now follow the mod exactly: a `.bikey` sits in `server/keys`
+while the mod that ships it is enabled and a client mod, and not otherwise.
+That is checked after a download, on a type switch and when a mod is switched
+on or off — the case that used to be missed, and the one where a missing key
+turns into every player being rejected. *Sync keys* over the list rebuilds the
+directory from scratch for the cases the panel cannot see coming: it empties
+`server/keys` and copies back what the enabled mods bring. The DayZ key is left
+where it is.
 
 **1.1.3** — RCON no longer holds a session open. The panel logs in for the
 command, reads the answer and hangs up, which ends the `RCON disconnected: no

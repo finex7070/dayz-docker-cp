@@ -41,7 +41,7 @@ from .services.server_settings import SettingsStore
 from .services.startup import StartupSequence
 from .services.steamcmd import SteamCmdService
 
-__version__ = "1.1.3"
+__version__ = "1.2.0"
 
 STARTED_AT = time.time()
 

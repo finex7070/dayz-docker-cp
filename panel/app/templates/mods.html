@@ -1,76 +1,68 @@
 {% extends "base.html" %}
 {% block heading %}Mods{% endblock %}
 
-{% block head_actions %}
-  <button class="btn btn-outline-primary btn-sm" data-mod-action="update-all"
-          {% if not mods %}disabled{% endif %}>Update all</button>
-{% endblock %}
-
 {% block content %}
 
-{# ---- add a mod ---- #}
-<div class="card mb-3">
-  <div class="card-header">Add a mod</div>
-  <div class="card-body">
+{# ---- the three ways a mod gets here ---- #}
+<div class="row g-3 mb-3">
 
-    <div class="row g-2 align-items-end">
-      <div class="col-md-6">
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">Install from workshop</div>
+      <div class="card-body d-flex flex-column">
         <label class="form-label" for="mod-query">Workshop ID or URL</label>
-        <input class="form-control" id="mod-query" placeholder="1559212036 or https://steamcommunity.com/sharedfiles/filedetails/?id=...">
-      </div>
-      <div class="col-md-3">
-        <label class="form-label" for="mod-type">Type</label>
-        <select class="form-select" id="mod-type">
-          <option value="client">Client mod (-mod)</option>
-          <option value="server">Server mod (-serverMod)</option>
-        </select>
-      </div>
-      <div class="col-md-3 d-flex gap-2">
-        <button class="btn btn-outline-secondary flex-fill" data-mod-action="lookup">Look up</button>
-        <button class="btn btn-primary flex-fill" data-mod-action="install">Install</button>
+        <input class="form-control" id="mod-query"
+               placeholder="1559212036 or https://steamcommunity.com/...">
+        <div class="form-text mt-2 mb-3">
+          Comes in as a client mod. The row below switches it to a server mod.
+        </div>
+        <button class="btn btn-primary mt-auto" data-mod-action="install">Install</button>
+        <div id="install-note" class="alert alert-secondary mt-3 mb-0" hidden></div>
       </div>
     </div>
-
-    <div class="form-text mt-2">
-      A client mod is loaded by players too and its <code>.bikey</code> goes into
-      the server's keys directory. A server mod runs on the server alone, so it
-      gets no key.
-    </div>
-
-    <div id="mod-lookup" class="alert alert-secondary mt-3" hidden></div>
   </div>
-</div>
 
-{# ---- launcher mod list ---- #}
-<div class="card mb-3">
-  <div class="card-header">Mod list</div>
-  <div class="card-body">
-    <div class="row g-2 align-items-end">
-      <div class="col-md-6">
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">Upload a mod</div>
+      <div class="card-body d-flex flex-column">
+        <label class="form-label" for="modzip-file">Zipped mod folder</label>
+        <input class="form-control" type="file" id="modzip-file" accept=".zip,application/zip">
+        <div class="form-text mt-2 mb-3">
+          The zip holds the <code>@Name</code> folder itself. It arrives switched
+          off, with its names lowercased for Linux.
+        </div>
+        <button class="btn btn-primary mt-auto" data-mod-action="upload">Upload</button>
+        <div id="modzip-note" class="alert alert-secondary mt-3 mb-0" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">Mod list</div>
+      <div class="card-body d-flex flex-column">
         <label class="form-label" for="modlist-file">DayZ Launcher preset</label>
         <input class="form-control" type="file" id="modlist-file"
                accept=".html,.htm,text/html">
-      </div>
-      <div class="col-md-3 d-grid">
-        <button class="btn btn-primary" data-mod-action="import">Import</button>
-      </div>
-      <div class="col-md-3 d-grid">
-        {# A link, not a button: the file comes straight off the response, and
-           no data-mod-action, or the page's click handler would cancel it. #}
-        {% set exportable = mods | selectattr('enabled') | list %}
-        <a class="btn btn-outline-secondary {% if not exportable %}disabled{% endif %}"
-           href="{{ url_for('mods.export_list') }}"
-           {% if not exportable %}aria-disabled="true" tabindex="-1"{% endif %}>Export</a>
+        <div class="form-text mt-2 mb-3">
+          Import adds every mod in it, skipping the installed ones. Export writes
+          the enabled workshop mods.
+        </div>
+        <div class="d-flex gap-2 mt-auto">
+          <button class="btn btn-primary flex-fill" data-mod-action="import">Import</button>
+          {# A link, not a button: the file comes straight off the response, and
+             no data-mod-action, or the page's click handler would cancel it. #}
+          {% set exportable = mods | selectattr('enabled') | rejectattr('local') | list %}
+          <a class="btn btn-outline-secondary flex-fill {% if not exportable %}disabled{% endif %}"
+             href="{{ url_for('mods.export_list') }}"
+             {% if not exportable %}aria-disabled="true" tabindex="-1"{% endif %}>Export</a>
+        </div>
+        <div id="modlist-note" class="alert alert-secondary mt-3 mb-0" hidden></div>
       </div>
     </div>
-
-    <div class="form-text mt-2">
-      Import adds every mod in the list as a client mod, skipping the installed
-      ones. Export writes the enabled mods, client and server.
-    </div>
-
-    <div id="modlist-note" class="alert alert-secondary mt-3" hidden></div>
   </div>
+
 </div>
 
 {# ---- search ---- #}
@@ -136,7 +128,17 @@
             <th style="width:11rem">Type</th>
             <th style="width:6rem">Size</th>
             <th style="width:9rem">Updated</th>
-            <th style="width:15rem"></th>
+            {# Above the per-mod buttons because they are the same kind of
+               thing, one row up: what those do for one mod, these do for all. #}
+            <th style="width:19rem" class="text-end">
+              <button class="btn btn-outline-secondary btn-sm fw-normal"
+                      data-mod-action="sync-keys"
+                      title="Empty server/keys and fill it from the enabled mods">Sync keys</button>
+              <button class="btn btn-outline-primary btn-sm fw-normal"
+                      data-mod-action="update-all"
+                      {% if not mods | rejectattr('local') | list %}disabled{% endif %}
+                      title="Check every workshop mod for a newer version">Update all</button>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -169,8 +171,13 @@
                    download running in it. #}
                 <small class="text-secondary">
                   <code>{{ mod.dir_name }}</code> &middot;
-                  <a href="{{ mod.url }}" target="_blank" rel="noopener"
-                     title="Open on the Steam Workshop">ID {{ mod.workshop_id }}</a>
+                  {% if mod.local %}
+                    local
+                  {% else %}
+                    Workshop:
+                    <a href="{{ mod.url }}" target="_blank" rel="noopener"
+                       title="Open on the Steam Workshop">{{ mod.workshop_id }}</a>
+                  {% endif %}
                 </small>
               </td>
               <td>
@@ -184,8 +191,12 @@
                 {% if mod.updated_at %}{{ mod.updated_at | timestamp }}{% else %}-{% endif %}
               </td>
               <td class="text-end text-nowrap">
-                <button class="btn btn-outline-primary btn-sm" data-mod-action="update">Update</button>
-                <button class="btn btn-outline-secondary btn-sm" data-mod-action="reinstall">Reinstall</button>
+                {# Nothing to fetch an uploaded mod from, so neither button is
+                   offered - both would only ever answer with the reason. #}
+                {% if not mod.local %}
+                  <button class="btn btn-outline-primary btn-sm" data-mod-action="update">Update</button>
+                  <button class="btn btn-outline-secondary btn-sm" data-mod-action="reinstall">Reinstall</button>
+                {% endif %}
                 <button class="btn btn-outline-danger btn-sm" data-mod-action="delete">Delete</button>
               </td>
             </tr>
@@ -200,7 +211,9 @@
   {% endif %}
 
   <div class="card-footer text-secondary small">
-    Changes to mods take effect when the server next starts.
+    Changes to mods take effect when the server next starts. A folder uploaded
+    into <code>server/</code> joins the list disabled, with its file names as
+    they came - DayZ on Linux needs them lowercase.
     {% if server_running %}
       The server is running right now, so the panel asks before touching files it has open.
     {% endif %}
@@ -209,10 +222,11 @@
 
 {% if orphans %}
   <div class="alert alert-warning mt-3">
-    <strong>Unknown mod directories in <code>data/server/</code>:</strong>
+    <strong>Not a mod, in <code>server/</code>:</strong>
     {{ orphans|join(', ') }}.<br>
-    The panel did not install these and leaves them alone - they are not on the
-    command line. Delete them by hand if they are leftovers.
+    Named like a mod but without an <code>addons</code> folder, so the panel
+    leaves them alone - an interrupted upload, or a folder that happens to
+    start with an @.
   </div>
 {% endif %}
 
