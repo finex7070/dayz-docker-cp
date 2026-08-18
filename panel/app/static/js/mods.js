@@ -512,10 +512,100 @@
       var name = row.querySelector("strong").textContent;
       if (!window.confirm("Delete " + name + " from the server directory?")) return;
       send("/mods/" + id + "/delete").then(afterChange);
-    } else if (action === "up" || action === "down") {
-      post("/mods/" + id + "/move", { direction: action }).then(afterChange);
     }
   });
+
+  // --- load order by drag ----------------------------------------------------
+  //
+  // The rows move in the page as one drags, and the order that comes out of it
+  // is posted whole. Sending "one up" per step would need the same arithmetic
+  // on both sides, and the two would disagree the first time a drop landed
+  // three rows away.
+
+  var rows = document.getElementById("mod-rows");
+  var dragging = null;
+  var orderBefore = "";
+
+  function order() {
+    return Array.from(rows.querySelectorAll("tr[data-mod-id]"))
+      .map(function (row) { return row.dataset.modId; });
+  }
+
+  function saveOrder() {
+    var now = order();
+    if (now.join() === orderBefore) return;      // picked up and put back
+    post("/mods/order", { ids: now }).then(function (res) {
+      if (res.handled) return;
+      // A refused order means the page is out of date, and reloading is the
+      // only honest way back - the list on screen is not what is stored.
+      if (res.ok === false) {
+        showError(res.error || "The order could not be saved.");
+        window.setTimeout(function () { window.location.reload(); }, 1500);
+      }
+    });
+  }
+
+  function moveBy(row, offset) {
+    var all = Array.from(rows.querySelectorAll("tr[data-mod-id]"));
+    var index = all.indexOf(row);
+    var target = index + offset;
+    if (target < 0 || target >= all.length) return;
+    orderBefore = order().join();
+    if (offset < 0) rows.insertBefore(row, all[target]);
+    else rows.insertBefore(row, all[target].nextSibling);
+    saveOrder();
+  }
+
+  if (rows) {
+    rows.addEventListener("dragstart", function (event) {
+      var handle = event.target.closest("[data-mod-handle]");
+      if (!handle) {
+        event.preventDefault();          // nothing else in a row is draggable
+        return;
+      }
+      dragging = handle.closest("tr[data-mod-id]");
+      orderBefore = order().join();
+      dragging.classList.add("mod-dragging");
+      event.dataTransfer.effectAllowed = "move";
+      // Firefox starts no drag at all without data on the transfer.
+      event.dataTransfer.setData("text/plain", dragging.dataset.modId);
+    });
+
+    rows.addEventListener("dragover", function (event) {
+      if (!dragging) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      var over = event.target.closest("tr[data-mod-id]");
+      if (!over || over === dragging) return;
+      // Past the middle of the row under the pointer means below it - so the
+      // last place in the list is reachable, not only the gaps between rows.
+      var box = over.getBoundingClientRect();
+      var below = event.clientY > box.top + box.height / 2;
+      rows.insertBefore(dragging, below ? over.nextSibling : over);
+    });
+
+    rows.addEventListener("drop", function (event) {
+      event.preventDefault();
+    });
+
+    rows.addEventListener("dragend", function () {
+      if (!dragging) return;
+      dragging.classList.remove("mod-dragging");
+      dragging = null;
+      saveOrder();
+    });
+
+    // Without this the order is mouse-only, and a list of twenty mods is
+    // exactly where a keyboard is faster.
+    rows.addEventListener("keydown", function (event) {
+      var handle = event.target.closest("[data-mod-handle]");
+      if (!handle) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      moveBy(handle.closest("tr[data-mod-id]"), event.key === "ArrowUp" ? -1 : 1);
+      handle.focus();
+    });
+  }
 
   document.addEventListener("change", function (event) {
     var target = event.target.closest("[data-mod-action]");

@@ -165,21 +165,25 @@ class ModRegistry:
             self._write()
             return mod
 
-    def move(self, workshop_id: int, offset: int) -> None:
-        """Shift a mod in the load order.
+    def reorder(self, ids: list[int]) -> None:
+        """Put the list in exactly this order.
 
         Order is not cosmetic: DayZ loads mods in the order given on the command
         line, and a mod that patches another has to come after it.
+
+        The whole order is written at once rather than one step at a time. A
+        drag is one move to the operator, and a list of ids is the state it
+        ends in - no arithmetic on this side that could disagree with what the
+        page shows.
         """
         with self._lock:
-            ids = [m.workshop_id for m in self._mods]
-            if workshop_id not in ids:
-                return
-            index = ids.index(workshop_id)
-            target = min(max(index + offset, 0), len(self._mods) - 1)
-            if target == index:
-                return
-            self._mods.insert(target, self._mods.pop(index))
+            known = {m.workshop_id: m for m in self._mods}
+            if sorted(ids) != sorted(known):
+                raise ModError(
+                    "The mod list has changed since this page was opened - "
+                    "reload it and try again."
+                )
+            self._mods = [known[workshop_id] for workshop_id in ids]
             self._write()
 
     # --- persistence ------------------------------------------------------
@@ -857,10 +861,19 @@ class ModService:
             message += " Without a key of their own: " + ", ".join(without) + "."
         return message
 
-    def move(self, workshop_id: int, offset: int) -> None:
-        self._require(workshop_id)
-        self.registry.move(workshop_id, offset)
+    def reorder(self, ids: object) -> list[Mod]:
+        """Take the load order the page ended up in."""
+        if not isinstance(ids, list) or not ids:
+            raise ModError("No order was sent.")
+        try:
+            wanted = [int(value) for value in ids]
+        except (TypeError, ValueError) as exc:
+            raise ModError("That is not a list of mods.") from exc
+
+        with self._lock:
+            self.registry.reorder(wanted)
         self.sync_launch_settings()
+        return self.registry.all()
 
     def delete(self, workshop_id: int, keep_download: bool = True) -> Mod:
         """Remove a mod from the server directory and the registry.

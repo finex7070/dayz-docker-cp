@@ -141,14 +141,16 @@
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="mod-rows">
           {% for mod in mods %}
             <tr data-mod-id="{{ mod.workshop_id }}">
+              {# The whole row travels, but only this cell starts the drag -
+                 dragging a row from anywhere would swallow every click in it. #}
               <td class="text-nowrap">
-                <div class="btn-group-vertical btn-group-sm">
-                  <button class="btn btn-outline-secondary py-0" data-mod-action="up" title="Load earlier">&#9650;</button>
-                  <button class="btn btn-outline-secondary py-0" data-mod-action="down" title="Load later">&#9660;</button>
-                </div>
+                <span class="mod-handle" data-mod-handle draggable="true"
+                      tabindex="0" role="button"
+                      aria-label="Drag to reorder, or use the arrow keys"
+                      title="Drag to reorder &middot; &uarr;/&darr; with the keyboard">&#10495;</span>
               </td>
               <td>
                 <div class="form-check form-switch d-inline-block me-2 align-middle">
