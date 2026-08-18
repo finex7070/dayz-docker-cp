@@ -345,3 +345,24 @@ body {
   font-size: .95rem;
   user-select: all;          /* one click selects the whole address */
 }
+
+/* The grip a mod row is dragged by. Only this cell starts a drag, so it has to
+   look like the one part of the row that can be picked up. */
+.mod-handle {
+  display: inline-block;
+  padding: .1rem .35rem;
+  border-radius: var(--bs-border-radius-sm);
+  color: var(--bs-secondary-color);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;         /* dragging must not smear a text selection */
+}
+.mod-handle:hover,
+.mod-handle:focus-visible { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
+.mod-handle:active { cursor: grabbing; }
+
+/* The row being carried, and the gap it will drop into. Kept faint: the list
+   below it is what one is aiming at. */
+tr.mod-dragging { opacity: .45; }
+tr.mod-dragging td { background: var(--bs-tertiary-bg); }

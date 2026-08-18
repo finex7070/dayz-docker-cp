@@ -35,8 +35,8 @@ Delete the container, keep the volume, and your server is unchanged.
   the browser, with live output and a **Steam Guard prompt** in the UI. The
   panel remembers when the files were last updated and last checked.
 - **🧩 Mod management** — Install workshop mods by ID, URL or search, set each
-  one as a client mod (`-mod`) or server-only mod (`-serverMod`), reorder the
-  load order, update, reinstall or remove. Signature keys follow the mod: a
+  one as a client mod (`-mod`) or server-only mod (`-serverMod`), drag the load
+  order into place, update, reinstall or remove. Signature keys follow the mod: a
   `.bikey` is in `server/keys` while the mod is enabled and a client mod, and
   *Sync keys* rebuilds the directory when it drifted. A mod uploaded into
   `server/` by hand joins the same list. A DayZ Launcher `modlist.html` can be
@@ -88,9 +88,10 @@ and the server's own output streaming in — with an RCON prompt underneath it.
 
 Three ways in, side by side: a workshop ID or URL, a zipped mod folder, or a
 DayZ Launcher preset. Each mod is a client mod or a server-only mod, and the
-order in this list is the order on the command line. A mod that was not
-downloaded but uploaded — a `@Name` folder with an `addons` directory in it —
-appears in the same list, marked *local* and disabled until you say otherwise.
+order in this list is the order on the command line — drag a row by its handle
+to change it. A mod that was not downloaded but uploaded — a `@Name` folder with
+an `addons` directory in it — appears in the same list, marked *local* and
+disabled until you say otherwise.
 A preset imports as client mods; the export writes the enabled workshop mods,
 client and server, into a file players can drop into their launcher — an
 uploaded mod has no workshop page to point at, so it stays out.
@@ -319,6 +320,11 @@ re-download those.
 
 ## Release notes
 
+**1.2.1** — The load order is dragged into place by the handle at the left of
+each row, instead of one click per step: a freshly installed mod sits at the
+bottom, and putting it first used to be a click per row. Dropping it saves the
+whole order at once; the arrow keys do the same when the handle has focus.
+
 **1.2.0** — Uploaded mods are managed like any other. A folder in `server/`
 that starts with `@` and has an `addons` directory in it is a mod, so it joins
 the list with a type, a place in the load order and its keys — disabled, so a
@@ -326,8 +332,8 @@ folder appearing on disk never puts itself on the next command line. Update and
 Reinstall are not offered for one: there is nothing to fetch it from, and the
 mod list export leaves it out for the same reason.
 
-The top of the page is three cards now — install from the workshop, upload a
-zipped mod, or import and export a launcher preset. The upload takes the
+The top of the page is three cards now — install from the workshop,
+upload a zipped mod, or import and export a launcher preset. The upload takes the
 `@Name` folder as it is, lowercases the names for Linux and puts the mod
 straight into the list; a second upload of the same folder replaces it.
 

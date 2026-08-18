@@ -296,16 +296,18 @@ def sync_keys():
     return jsonify(ok=True, message=message)
 
 
-@bp.post("/<int:workshop_id>/move")
+@bp.post("/order")
 @login_required
-def move(workshop_id: int):
-    """Shift a mod up or down the load order."""
+def reorder():
+    """Take the load order a drag ended in - the whole list, not a step."""
     payload = request.get_json(silent=True) or {}
-    offset = -1 if payload.get("direction") == "up" else 1
     try:
-        _service().move(workshop_id, offset)
+        mods = _service().reorder(payload.get("ids"))
     except ModError as exc:
-        return jsonify(ok=False, error=str(exc)), 404
+        record("mods.order", ok=False, detail=str(exc))
+        return jsonify(ok=False, error=str(exc)), 400
+
+    record("mods.order", detail=", ".join(mod.dir_name for mod in mods))
     return jsonify(ok=True)
 
 
