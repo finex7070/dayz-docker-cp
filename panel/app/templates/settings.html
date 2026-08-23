@@ -96,6 +96,19 @@
               {{ switch('auto_restart', 'Restart after a crash', current.auto_restart, 'Starts the server again if it exits on its own: after 5s, 15s and 60s, then gives up.') }}
               {{ switch('freeze_check', 'Freeze check (-freezeCheck)', current.freeze_check, 'Ends a frozen server after five minutes and writes a dump.') }}
               {{ switch('file_patching', 'File patching (-filePatching)', current.file_patching, 'Loads unpacked files instead of PBOs only. For mod development.') }}
+              <hr class="my-3">
+              <label class="form-label" for="stop_timeout_seconds">Stop timeout</label>
+              <div class="input-group" style="max-width:14rem">
+                <input class="form-control" type="number" id="stop_timeout_seconds"
+                       name="stop_timeout_seconds" min="{{ stop_timeout_min }}"
+                       max="{{ stop_timeout_max }}"
+                       value="{{ current.stop_timeout_seconds }}" required>
+                <span class="input-group-text">s</span>
+              </div>
+              <div class="form-text">
+                How long a stop waits for the server to save before the process
+                is killed. The Stop button turns into Kill while it waits.
+              </div>
             </div>
           </div>
 

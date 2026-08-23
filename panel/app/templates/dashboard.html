@@ -142,8 +142,15 @@
             {% if not status.can_start %}disabled{% endif %}>Start</button>
     <button class="btn btn-outline-secondary" data-server-action="restart"
             {% if not status.can_stop %}disabled{% endif %}>Restart</button>
-    <button class="btn btn-outline-danger" data-server-action="stop"
-            {% if not status.can_stop %}disabled{% endif %}>Stop</button>
+    {# One button, two jobs: Stop asks the server to save and go, Kill ends the
+       process once a shutdown is under way and not moving. #}
+    {% set killing = status.state == 'stopping' %}
+    <button class="btn {{ 'btn-danger' if killing else 'btn-outline-danger' }}"
+            data-server-action="stop" data-force="{{ '1' if killing else '' }}"
+            title="{{ 'End the process now, without waiting for it to save'
+                      if killing else 'Ask the server to shut down and save' }}"
+            {% if not (status.can_kill if killing else status.can_stop) %}disabled{% endif %}
+            >{{ 'Kill' if killing else 'Stop' }}</button>
 
     <span class="vr mx-2 d-none d-sm-inline"></span>
 

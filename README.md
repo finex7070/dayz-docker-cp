@@ -29,8 +29,11 @@ Delete the container, keep the volume, and your server is unchanged.
 
 - **🎮 Server control** — Start, restart and stop from the dashboard, with live
   status: state, uptime, player count (Steam A2S), CPU and memory against the
-  container's actual limits. A crashed server is restarted automatically if you
-  let it.
+  container's actual limits. *Running* means the mission is loaded and players
+  can join — the engine says so itself, and until it does the state is
+  *Starting*. A stop waits as long as you allow for the server to write its
+  persistence, and the same button offers *Kill* while it waits. A crashed
+  server is restarted automatically if you let it.
 - **📦 SteamCMD without a terminal** — Install and update the server files from
   the browser, with live output and a **Steam Guard prompt** in the UI. The
   panel remembers when the files were last updated and last checked.
@@ -319,6 +322,17 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.2.2** — *Running* now means the mission is loaded. The panel used to say so
+the moment the process existed, which on a measured 1.29 start was more than two
+minutes early: the console command line and the RCON buttons were offered while
+BattlEye was not yet answering. The engine announces the moment itself
+(`Player connect enabled`), and the watcher that already reads every line it
+prints now waits for it — the state in between is *Starting*. How long a stop
+waits for the server to save before the process is killed is a setting
+(*Behaviour*, 5 to 600 seconds, 30 by default); a full server writes its
+persistence for longer than an empty one. While it waits, the Stop button
+becomes **Kill**, which ends the process at once and says what that costs.
 
 **1.2.1** — The load order is dragged into place by the handle at the left of
 each row, instead of one click per step: a freshly installed mod sits at the

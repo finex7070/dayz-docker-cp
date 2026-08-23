@@ -8,6 +8,10 @@ manager, a second watchdog and orphaned processes nobody owns.
 The DayZ server is stopped with SIGTERM and only killed if it ignores that:
 it writes its persistence to disk on the way out, and a SIGKILL in the middle
 of that is how a save gets corrupted.
+
+"Running" means the mission is loaded, not that the process exists. The engine
+announces that itself, and the watcher below is already reading every line it
+prints - see READY_MARKERS.
 """
 
 from __future__ import annotations
@@ -33,9 +37,23 @@ log = logging.getLogger(__name__)
 
 MAX_CONSOLE_LINES = 2000
 
-# How long SIGTERM gets before SIGKILL. DayZ writes persistence on shutdown;
-# on a well populated server that takes noticeably longer than on an empty one.
-STOP_TIMEOUT_SECONDS = 30
+# What the engine prints once the mission is loaded and players may join.
+# "Player connect enabled" is that moment exactly; the FPS line is the game
+# loop's own heartbeat and stands in for it should a build rename the first.
+# Measured on 1.29: the process exists for over two minutes before either.
+READY_MARKERS = ("Player connect enabled", "Average server FPS:")
+
+# What the panel itself gets when the container stops, whatever the operator
+# set for a manual stop. The chain in PLAN.md 7.5 is built on this number:
+# it has to stay under gunicorn's graceful_timeout (50s), which has to stay
+# under compose's stop_grace_period (60s). A longer wait here does not buy the
+# server more time, it only moves the kill from the panel to Docker.
+CONTAINER_STOP_TIMEOUT = 30
+
+# A build that renames both markers must not strand the panel in "Starting":
+# everything gated on RUNNING - RCON, the console command line - would stay
+# disabled for good. Generous, because a heavily modded server loads for long.
+READY_TIMEOUT_SECONDS = 900
 
 # Auto restart after a crash, with growing gaps. A server that dies instantly
 # because of a broken mod would otherwise restart forever and bury the reason.
@@ -98,6 +116,7 @@ class ServerManager:
         self._exited.set()
         self._crashes: deque[float] = deque(maxlen=len(RESTART_DELAYS) + 1)
         self._restart_timer: threading.Timer | None = None
+        self._ready_timer: threading.Timer | None = None
         self._cpu_sample: tuple[float, float] | None = None  # (ticks, monotonic)
         self._cpu_percent = 0.0
 
@@ -161,10 +180,18 @@ class ServerManager:
             log.error("Server start failed: %s", exc)
             raise
 
-    def stop(self, *, wait: bool = False, timeout: float = STOP_TIMEOUT_SECONDS) -> None:
+    @property
+    def stop_timeout(self) -> int:
+        """How long a shutdown gets before the process is killed."""
+        return self.store.current.stop_timeout_seconds
+
+    def stop(self, *, wait: bool = False, timeout: float | None = None) -> None:
         """Ask the server to shut down. Runs in the background unless `wait`."""
+        if timeout is None:
+            timeout = self.stop_timeout
         with self._lock:
             self._cancel_pending_restart()
+            self._cancel_ready_timer()
             if not self._state.is_up or self._proc is None:
                 raise ServerError("The server is not running.")
             if self._state is ServerState.STOPPING and not wait:
@@ -185,6 +212,27 @@ class ServerManager:
         threading.Thread(
             target=self._terminate, args=(proc, timeout), name="dayz-stop", daemon=True
         ).start()
+
+    def kill(self) -> str:
+        """End the process now, without waiting for it to save.
+
+        The way out of a shutdown that is not progressing. It costs whatever the
+        server had not written yet, which is why it is a separate decision from
+        stop() rather than a shorter timeout.
+        """
+        with self._lock:
+            self._cancel_pending_restart()
+            self._cancel_ready_timer()
+            if not self._state.is_up or self._proc is None:
+                raise ServerError("The server is not running.")
+            self._state = ServerState.STOPPING
+            self._stop_requested = True
+            proc = self._proc
+
+        self._console.append("[panel] Killing the process on request (SIGKILL)")
+        log.warning("DayZ server killed on request (pid %s)", proc.pid)
+        self._send_kill(proc)
+        return "Kill signal sent - unsaved state is lost."
 
     def restart(self) -> None:
         with self._lock:
@@ -215,7 +263,7 @@ class ServerManager:
                 return
         log.info("Panel is shutting down - stopping the DayZ server first")
         try:
-            self.stop(wait=True)
+            self.stop(wait=True, timeout=min(self.stop_timeout, CONTAINER_STOP_TIMEOUT))
         except ServerError:
             pass
 
@@ -272,12 +320,15 @@ class ServerManager:
         with self._lock:
             self._proc = proc
             self._command = command
-            self._state = ServerState.RUNNING
+            # Not RUNNING: the process exists, but the mission takes minutes to
+            # load and nobody can join until it has. _note_progress promotes it.
+            self._state = ServerState.STARTING
             self._started_at = time.time()
             self._stopped_at = None
             self._exited = exited
             self._cpu_sample = None
             self._cpu_percent = 0.0
+            self._arm_ready_timer()
 
         log.info("DayZ server started (pid %s, %s)", proc.pid, reason)
         threading.Thread(
@@ -291,7 +342,9 @@ class ServerManager:
         """Pump the server's output, then decide what its exit meant."""
         try:
             for line in proc.stdout:  # type: ignore[union-attr]
-                self._console.append(line.rstrip("\r\n"))
+                text = line.rstrip("\r\n")
+                self._console.append(text)
+                self._note_progress(text, proc)
         except (OSError, ValueError):
             pass
         finally:
@@ -307,11 +360,51 @@ class ServerManager:
         finally:
             exited.set()
 
+    def _note_progress(self, line: str, proc: subprocess.Popen) -> None:
+        """Promote STARTING to RUNNING when the engine says it is open."""
+        with self._lock:
+            if self._proc is not proc or self._state is not ServerState.STARTING:
+                return
+            if not any(marker in line for marker in READY_MARKERS):
+                return
+        self._mark_ready("the mission is loaded")
+
+    def _mark_ready(self, reason: str) -> None:
+        with self._lock:
+            if self._state is not ServerState.STARTING:
+                return  # stopped, crashed, or already up while we waited
+            self._state = ServerState.RUNNING
+            self._cancel_ready_timer()
+            waited = time.time() - (self._started_at or time.time())
+
+        self._console.append(f"[panel] Server is up after {waited:.0f}s - {reason}")
+        log.info("DayZ server is up after %.0fs (%s)", waited, reason)
+
+    def _arm_ready_timer(self) -> None:
+        """Caller holds the lock."""
+        self._cancel_ready_timer()
+        timer = threading.Timer(
+            READY_TIMEOUT_SECONDS,
+            self._mark_ready,
+            args=(f"no ready marker within {READY_TIMEOUT_SECONDS}s",),
+        )
+        timer.name = "dayz-ready"
+        timer.daemon = True
+        self._ready_timer = timer
+        timer.start()
+
+    def _cancel_ready_timer(self) -> None:
+        """Caller holds the lock."""
+        if self._ready_timer is not None:
+            self._ready_timer.cancel()
+            self._ready_timer = None
+
     def _on_exit(self, proc: subprocess.Popen, code: int) -> None:
         with self._lock:
             if self._proc is not proc:
                 return  # a newer process has taken over
 
+            self._cancel_ready_timer()
             expected = self._stop_requested
             uptime = time.time() - (self._started_at or time.time())
             self._proc = None
@@ -375,7 +468,9 @@ class ServerManager:
             self._restart_timer = None
 
     def _terminate(self, proc: subprocess.Popen, timeout: float) -> None:
-        self._console.append("[panel] Sending SIGTERM, waiting for a clean shutdown")
+        self._console.append(
+            f"[panel] Sending SIGTERM, waiting up to {timeout:.0f}s for a clean shutdown"
+        )
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except (OSError, ProcessLookupError):
@@ -391,6 +486,9 @@ class ServerManager:
             f"[panel] No shutdown within {timeout:.0f}s - killing the process"
         )
         log.warning("DayZ server ignored SIGTERM for %ss, sending SIGKILL", timeout)
+        self._send_kill(proc)
+
+    def _send_kill(self, proc: subprocess.Popen) -> None:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (OSError, ProcessLookupError):
@@ -419,6 +517,10 @@ class ServerManager:
                 "blocked_reason": "" if state.is_up else self.blocked_reason(),
                 "can_start": not state.is_up and not self.blocked_reason(),
                 "can_stop": state.is_up and state is not ServerState.STOPPING,
+                # Separate from can_stop: this is the way out of a shutdown
+                # that is not progressing, so it stays available during one.
+                "can_kill": state.is_up and proc is not None,
+                "stop_timeout_seconds": self.store.current.stop_timeout_seconds,
                 "mission": self.store.current.mission,
             }
 

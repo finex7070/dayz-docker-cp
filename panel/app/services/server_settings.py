@@ -26,6 +26,14 @@ DEFAULT_MISSION = "dayzOffline.chernarusplus"
 # DayZ ignores anything above this, so a larger value is a typo, not a wish.
 MAX_LIMIT_FPS = 200
 
+# How long a stop waits for the server to write its persistence before the
+# process is killed. Owned here rather than in server.py because it is a
+# number the operator changes: a populated server saves for longer than an
+# empty one, and how long is worth waiting is a judgement about that server.
+STOP_TIMEOUT_DEFAULT = 30
+STOP_TIMEOUT_MIN = 5
+STOP_TIMEOUT_MAX = 600
+
 
 class SettingsError(ValueError):
     """A supplied value cannot be used - reported back to the form."""
@@ -53,6 +61,7 @@ class ServerSettings:
     # server, not to how the container was created.
     rcon_restrict: bool = True
     auto_restart: bool = True
+    stop_timeout_seconds: int = STOP_TIMEOUT_DEFAULT
 
     # What the panel does on container start. Here rather than in the
     # environment because they are operating decisions that get changed while
@@ -201,6 +210,8 @@ def _validate(changes: dict, strict: bool = True) -> dict:
             result[key] = _as_mission(value)
         elif key == "cpu_count":
             result[key] = _as_int(value, "CPU count", 1, max(cores, 1))
+        elif key == "stop_timeout_seconds":
+            result[key] = _as_int(value, "Stop timeout", STOP_TIMEOUT_MIN, STOP_TIMEOUT_MAX)
         elif key == "limit_fps":
             result[key] = _as_optional_int(value, "FPS limit", 1, MAX_LIMIT_FPS)
         elif key == "rcon_password":

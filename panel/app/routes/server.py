@@ -72,6 +72,13 @@ def start():
 @bp.post("/stop")
 @login_required
 def stop():
+    """Ask the server to shut down - or kill it, if one is already under way.
+
+    One endpoint rather than two because it is one button: the operator clicks
+    Stop, and clicks the same place again when the shutdown is not moving.
+    """
+    if (request.get_json(silent=True) or {}).get("force"):
+        return _action(lambda: _manager().kill(), "server.kill")
     return _action(lambda: _manager().stop(), "server.stop")
 
 
