@@ -280,7 +280,8 @@ Aktualisierung: Statuskacheln über den gemeinsamen `/status.json`-Poll (10 s, D
   ```
   Die letzte Zeile stammt aus den Einstellungen (§6.5); abgeschaltete Schalter und leere Werte werden weggelassen, nicht mit Leerwert gesetzt.
   Arbeitsverzeichnis `/data/server`, stdout/stderr in Pipe → `LogStreamer`
-- **Stop:** `SIGTERM` → bis 30 s warten → `SIGKILL`; Statusmaschine mit Lock verhindert parallele Aktionen
+- **Stop:** `SIGTERM` → bis zur eingestellten Frist warten → `SIGKILL`; Statusmaschine mit Lock verhindert parallele Aktionen. Die Frist gehört dem Betreiber (`stop_timeout_seconds`, Standard 30 s, 5–600 s): ein voller Server schreibt seine Persistenz länger als ein leerer. Derselbe Knopf bietet während des Wartens **Kill** an, das sofort `SIGKILL` schickt — der Ausweg aus einem Shutdown, der nicht vorankommt, bezahlt mit dem, was noch nicht geschrieben war. Beim Herunterfahren des Containers gilt stattdessen `CONTAINER_STOP_TIMEOUT` (30 s), siehe §7.5.
+- **Statuserkennung:** `running` heißt *Mission geladen*, nicht *Prozess existiert*. Bis die Engine `Player connect enabled` schreibt, steht der Status auf `starting`; der Watcher liest die Zeile aus dem stdout, das er ohnehin zeilenweise puffert — kein zweiter Leser auf der RPT. Die FPS-Zeile (`Average server FPS:`) dient als Ersatzmarker, falls ein Build die erste umbenennt, und `READY_TIMEOUT_SECONDS` (900 s) als Notausgang: ein dauerhaft in `starting` hängendes Panel hätte RCON und die Kommandozeile permanent gesperrt.
 - **Restart:** Stop + Wartezeit + Start als Hintergrundjob mit Statusanzeige
 - **Watchdog:** prüft `Popen.poll()`; unerwarteter Exit → Status `crashed`, optionaler Auto-Restart mit Backoff gegen Crash-Loops
 - Start wird blockiert, solange ein SteamCMD-Job läuft, und umgekehrt
@@ -896,7 +897,7 @@ Mehr als ein Worker bedeutet mehrere `ServerManager`-Instanzen → falscher Stat
 Häufigste Fehlerursache auf Linux-DayZ-Servern. Die Normalisierung ist Pflichtbestandteil von `ModManager`, kein Komfortfeature.
 
 **7.5 Sauberes Herunterfahren**
-Bei `docker stop` muss das Panel den DayZ-Server zuerst beenden, damit Spielerdaten persistiert werden: `atexit`-Hook im Panel + `stop_grace_period: 60s`, Tini als PID 1 gegen Zombies. Entscheidend ist dabei die Reihenfolge der Zeitlimits — `graceful_timeout` von Gunicorn (Default 30 s) muss **über** dem eigenen Stop-Timeout (30 s + Nachlauf) und **unter** der `stop_grace_period` liegen, sonst killt Gunicorn den Worker mitten im Herunterfahren und der DayZ-Prozess bleibt verwaist zurück. Gesetzt: 50 s.
+Bei `docker stop` muss das Panel den DayZ-Server zuerst beenden, damit Spielerdaten persistiert werden: `atexit`-Hook im Panel + `stop_grace_period: 60s`, Tini als PID 1 gegen Zombies. Entscheidend ist dabei die Reihenfolge der Zeitlimits — `graceful_timeout` von Gunicorn (Default 30 s) muss **über** dem eigenen Stop-Timeout (30 s + Nachlauf) und **unter** der `stop_grace_period` liegen, sonst killt Gunicorn den Worker mitten im Herunterfahren und der DayZ-Prozess bleibt verwaist zurück. Gesetzt: 50 s. Seit der Stop-Timeout einstellbar ist, hängt diese Kette **nicht** an ihm: der atexit-Pfad nimmt `min(Einstellung, CONTAINER_STOP_TIMEOUT)`. Länger zu warten würde dem Server keine Zeit schenken, sondern nur den Kill von Gunicorn zu Docker verschieben.
 
 **7.6 Rechte auf Bind-Mounts**
 `chown -R` auf `/data` gemäß `PUID`/`PGID` im Entrypoint, **bevor** per `gosu` auf `steam` gewechselt wird.

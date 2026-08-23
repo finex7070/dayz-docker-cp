@@ -23,7 +23,11 @@ from flask_login import login_required
 
 from ..services import server_config, serverdz
 from ..services.audit import record
-from ..services.server_settings import SettingsError
+from ..services.server_settings import (
+    STOP_TIMEOUT_MAX,
+    STOP_TIMEOUT_MIN,
+    SettingsError,
+)
 
 bp = Blueprint("settings", __name__, url_prefix="/settings")
 
@@ -52,6 +56,8 @@ def index():
         cfg_form_key=serverdz.FORM_FIELDS_KEY,
         cfg_all_keys=serverdz.ALL_KEYS,
         mod_summary=_mod_summary(store.current),
+        stop_timeout_min=STOP_TIMEOUT_MIN,
+        stop_timeout_max=STOP_TIMEOUT_MAX,
     )
 
 
@@ -69,6 +75,7 @@ def save_general():
         "cpu_count": form.get("cpu_count", ""),
         "limit_fps": form.get("limit_fps", ""),
         "rcon_password": form.get("rcon_password", ""),
+        "stop_timeout_seconds": form.get("stop_timeout_seconds", ""),
         **{name: name in form for name in _SWITCHES},
     }
 

@@ -181,6 +181,18 @@
     if (el.send) el.send.disabled = !rcon.ready;
   }
 
+  function applyStopButton(btn, status) {
+    var killing = status.state === "stopping";
+    btn.textContent = killing ? "Kill" : "Stop";
+    btn.classList.toggle("btn-danger", killing);
+    btn.classList.toggle("btn-outline-danger", !killing);
+    btn.dataset.force = killing ? "1" : "";
+    btn.disabled = killing ? !status.can_kill : !status.can_stop;
+    btn.title = killing
+      ? "End the process now, without waiting for it to save"
+      : "Ask the server to shut down and save";
+  }
+
   function applyStatus(status) {
     if (!status) return;
     setAlert(el.blocked, status.blocked_reason);
@@ -193,7 +205,11 @@
     el.actions.querySelectorAll("[data-server-action]").forEach(function (btn) {
       var action = btn.dataset.serverAction;
       if (action === "start") btn.disabled = !status.can_start;
-      else if (action === "restart" || action === "stop") btn.disabled = !status.can_stop;
+      // The same button, twice over: Stop while the server runs, Kill once a
+      // shutdown is under way and not moving. Two buttons would leave one of
+      // them greyed out at all times.
+      else if (action === "stop") applyStopButton(btn, status);
+      else if (action === "restart") btn.disabled = !status.can_stop;
       // A backup needs the job slot, not the server: it can run while the
       // server is stopped, and must not while SteamCMD is writing.
       else if (action === "backup") btn.disabled = !!status.job_busy;
@@ -229,10 +245,16 @@
     event.preventDefault();
 
     var action = btn.dataset.serverAction;
-    // Only the two that interrupt play ask back. Lock is reversible with the
+    var force = action === "stop" && btn.dataset.force === "1";
+    // Only the ones that interrupt play ask back. Lock is reversible with the
     // button next to it, and a confirm on every one of them trains the habit
     // of clicking it away.
-    if ((action === "restart" || action === "stop")
+    if (force) {
+      if (!window.confirm(
+        "Kill the server process now?\n\n"
+        + "Everything it has not written yet is lost."
+      )) return;
+    } else if ((action === "restart" || action === "stop")
         && !window.confirm("Really " + action + " the server?")) return;
 
     btn.disabled = true;
@@ -240,18 +262,19 @@
     setAlert(el.error, "");
     // Backup lives on its own page and brings its own URL along; everything
     // else is a verb on /server.
-    post(btn.dataset.url || "/server/" + action).then(function (res) {
-      if (res && res.handled) return;
-      actionError = (res && res.error) || "";
-      if (actionError) setAlert(el.error, actionError);
-      // "Updating before start: mods." - the work happens in the background,
-      // so without this the button click would look like it did nothing.
-      if (res && res.message) append(["[panel] " + res.message]);
-      if (res && res.ok && action === "backup") {
-        append(["[panel] Backup started - follow it on the Backups page."]);
-      }
-      refreshStatus();
-    });
+    post(btn.dataset.url || "/server/" + action, force ? { force: true } : null)
+      .then(function (res) {
+        if (res && res.handled) return;
+        actionError = (res && res.error) || "";
+        if (actionError) setAlert(el.error, actionError);
+        // "Updating before start: mods." - the work happens in the background,
+        // so without this the button click would look like it did nothing.
+        if (res && res.message) append(["[panel] " + res.message]);
+        if (res && res.ok && action === "backup") {
+          append(["[panel] Backup started - follow it on the Backups page."]);
+        }
+        refreshStatus();
+      });
   });
 
   // --- command entry ------------------------------------------------------
