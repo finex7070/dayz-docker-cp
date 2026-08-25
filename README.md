@@ -344,9 +344,9 @@ into `docker-compose.yml` by hand as `2302-2304`, so moving the port started the
 server where nothing was forwarded — while the dashboard went on showing the
 port it was not reachable on. `SERVER_PORT` now carries what is published, as
 one port or a range of up to three: game, reserved and BattlEye.
-`SERVER_PORT=2402-2404` moves all three. **Existing setups must change one
-line**, from `SERVER_PORT=2302` to `SERVER_PORT=2302-2304`; the container
-refuses to start until they do and says which line to write. The Steam master
+`SERVER_PORT=2402-2404` moves all three. **Check your `.env`**: a bare
+`SERVER_PORT=2302` stays valid and now means *game port only*, so BattlEye is no
+longer forwarded — write `SERVER_PORT=2302-2304` to keep what you had. The Steam master
 port `8766` is no longer published — nothing has bound it since Steamworks
 dropped that port in SDK 1.51, and the query port is what lists a server.
 
