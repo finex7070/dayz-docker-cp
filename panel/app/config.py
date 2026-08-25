@@ -33,6 +33,27 @@ def _env_int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be a number, got: {raw!r}") from None
 
 
+def _env_port_range(name: str, default: int) -> int:
+    """The game port out of a published range like "2302-2304".
+
+    SERVER_PORT carries the whole range because docker-compose.yml publishes it
+    verbatim and Compose cannot add - see the comment there. What the server
+    needs is the first port of it, the one it binds and reports to Steam.
+    A bare number is the older form; entrypoint.sh refuses it before the panel
+    ever starts, so accepting it here only keeps a debug run working.
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    first = raw.split("-", 1)[0].strip()
+    try:
+        return int(first)
+    except ValueError:
+        raise ValueError(
+            f"{name} must be a port range like 2302-2304, got: {raw!r}"
+        ) from None
+
+
 def normalize_mod_name(name: str) -> str:
     """Turn a workshop title into a directory-safe name.
 
@@ -302,11 +323,6 @@ class Settings:
     SERVER_APP_ID: int = 223350   # DayZ Server (Linux, cannot be downloaded anonymously)
     WORKSHOP_APP_ID: int = 221100  # DayZ client -- source for workshop mods
 
-    # Steam client port used to reach the master server. Not configurable:
-    # DayZ exposes no switch for it, so it is a constant rather than a setting.
-    # Without it the server runs but never shows up in the server browser.
-    STEAM_MASTER_PORT: int = 8766
-
     @classmethod
     def load(cls) -> "Settings":
         paths = Paths.from_env()
@@ -328,7 +344,7 @@ class Settings:
             steam_guard_code=_env_guard_code("STEAM_GUARD_CODE"),
             steam_api_key=_env_plain("STEAM_API_KEY"),
             server_real_ip=_env_plain("SERVER_REAL_IP"),
-            server_port=_env_int("SERVER_PORT", 2302),
+            server_port=_env_port_range("SERVER_PORT", 2302),
             steam_query_port=_env_int("STEAM_QUERY_PORT", 27016),
             # BattlEye RCON. Written into beserver_x64.cfg before every start,
             # together with the password from the settings page.

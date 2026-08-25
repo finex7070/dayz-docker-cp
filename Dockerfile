@@ -110,7 +110,6 @@ VOLUME ["/data"]
 EXPOSE 8080/tcp
 EXPOSE 2302-2306/udp
 EXPOSE 27016/udp
-EXPOSE 8766/udp
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PANEL_PORT}/healthz" || exit 1
