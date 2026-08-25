@@ -152,8 +152,24 @@ retention rules, and restore or download per snapshot.
 - **A Steam account that owns DayZ.** App 223350 cannot be downloaded
   anonymously. Steam Guard is supported.
 - **~10 GB of disk** for the server files, plus room for mods and backups
-- **Open ports** for the game: UDP `2302-2304`, `2305` (RCON), `27016` (Steam
-  query) and `8766` (Steam master). The panel itself is TCP `8080`.
+- **Open ports.** DayZ wants five UDP ports, and the panel one TCP port:
+
+  | Port | Role | Variable |
+  |---|---|---|
+  | `2302` | Game — players connect here | `SERVER_PORT` |
+  | `2303` | Reserved — the engine keeps it free | `SERVER_PORT` |
+  | `2304` | BattlEye | `SERVER_PORT` |
+  | `2305` | RCON | `RCON_PORT` |
+  | `27016` | Steam query — what the server browser asks | `STEAM_QUERY_PORT` |
+  | `8080/tcp` | The panel | `PANEL_PORT` |
+
+  `SERVER_PORT` is published exactly as written, so it is one port or a range of
+  up to three — pick how much you want reachable:
+
+  | Value | Published | Use |
+  |---|---|---|
+  | `2302` | game only | No BattlEye. It runs, but the anti-cheat cannot talk to players. |
+  | `2302-2304` | game, reserved, BattlEye | **What DayZ expects.** The default. |
 
 ---
 
@@ -249,7 +265,7 @@ retention — is edited in the panel and stored in the volume.
 | `STEAM_GUARD_CODE` | — | Only for the very first login; otherwise enter it in the panel. |
 | `STEAM_API_KEY` | — | Optional, only for workshop *search*. Installing by ID works without it. |
 | `SERVER_REAL_IP` | — | Public address, shown on the dashboard with a copy button. Display only. |
-| `SERVER_PORT` | `2302` | Game port. |
+| `SERVER_PORT` | `2302-2304` | One port or a range of up to three. The first is the game port. |
 | `STEAM_QUERY_PORT` | `27016` | Written into `serverDZ.cfg` before every start. |
 | `RCON_PORT` | `2305` | Written into `beserver_x64.cfg` before every start. |
 | `AUTO_INSTALL` | `true` | Install the server files on container start if missing. |
@@ -322,6 +338,17 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.2.3** — Changing `SERVER_PORT` works. The published game ports were written
+into `docker-compose.yml` by hand as `2302-2304`, so moving the port started the
+server where nothing was forwarded — while the dashboard went on showing the
+port it was not reachable on. `SERVER_PORT` now carries what is published, as
+one port or a range of up to three: game, reserved and BattlEye.
+`SERVER_PORT=2402-2404` moves all three. **Existing setups must change one
+line**, from `SERVER_PORT=2302` to `SERVER_PORT=2302-2304`; the container
+refuses to start until they do and says which line to write. The Steam master
+port `8766` is no longer published — nothing has bound it since Steamworks
+dropped that port in SDK 1.51, and the query port is what lists a server.
 
 **1.2.2** — *Running* now means the mission is loaded. The panel used to say so
 the moment the process existed, which on a measured 1.29 start was more than two

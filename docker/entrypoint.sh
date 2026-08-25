@@ -45,6 +45,10 @@ if [[ $# -eq 0 ]]; then
         log "WARNING: STEAM_USERNAME/STEAM_PASSWORD are not set."
         log "         The panel will start, but cannot download server files or mods."
     fi
+
+    # Own script so a test can drive every case in one container - see it
+    # for why SERVER_PORT is a range and what spans are allowed.
+    /opt/scripts/check_ports.sh
 fi
 
 # ---------------------------------------------------------------------------

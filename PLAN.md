@@ -57,8 +57,8 @@ Das Panel ist **nicht** ein Beiwerk zum Server, sondern der Einstiegspunkt des C
 │                                                                          │
 │  Volume /data: panel · steam · server (mit profiles + mods) · backup     │
 └──────────────────────────────────────────────────────────────────────────┘
-   8080/tcp (Panel) · 2302-2304/udp (Game) · 2305/udp (RCON)
-   27016/udp (Query) · 8766/udp (Master)
+   8080/tcp (Panel) · 2302-2304/udp (Game, Reserved, BattlEye) · 2305/udp (RCON)
+   27016/udp (Query)
 ```
 
 **Job-Modell:** SteamCMD-Läufe (Serverinstallation, Mod-Download) sind langlaufend. Sie laufen als benannte Hintergrund-Jobs mit Status (`queued/running/needs_guard/success/failed`), eigenem Log-Kanal und Fortschrittsanzeige. Es läuft immer nur **ein** SteamCMD-Job gleichzeitig (Lock) — parallele Läufe würden sich über dieselbe Steam-Session in die Quere kommen.
@@ -143,7 +143,7 @@ Aufbaureihenfolge (Layer-Caching beachten):
 8. **Python-Deps:** `COPY panel/requirements.txt` → `pip install --no-cache-dir -r`
    (eigener Layer **vor** dem App-Code)
 9. **App kopieren:** `panel/` → `/opt/panel`, `docker/` → `/opt/scripts`, `defaults/` → `/opt/defaults`
-10. `VOLUME /data` · `EXPOSE 8080/tcp 2302-2306/udp 27016/udp 8766/udp`
+10. `VOLUME /data` · `EXPOSE 8080/tcp 2302-2306/udp 27016/udp`
 11. `HEALTHCHECK` → `curl -f http://localhost:8080/healthz`
 12. `ENTRYPOINT ["/usr/bin/tini","--","/opt/scripts/entrypoint.sh"]`
 
@@ -203,11 +203,13 @@ Vier Ordner direkt unter `/data`; alles Serverbezogene liegt gebündelt unter `s
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `SERVER_PORT` | `2302` | DayZ Game-Port |
+| `SERVER_PORT` | `2302-2304` | Ein Port oder Bereich von höchstens drei; der erste geht als `-port=` in die Kommandozeile |
 | `STEAM_QUERY_PORT` | `27016` | Steam Query; wird vor jedem Start in `serverDZ.cfg` geschrieben |
 | `RCON_PORT` | `2305` | BattlEye-RCON; wird vor jedem Start in `beserver_x64.cfg` geschrieben |
 
-Zusätzlich wird **8766/udp** fest veröffentlicht (Steam-Master-Server). Der Port gehört dem Steam-Client, DayZ bietet keinen Schalter dafür — er ist deshalb eine Konstante im Code, keine Env-Variable. Fehlt er, läuft der Server, erscheint aber nicht in der Serverliste.
+DayZ belegt **drei aufeinanderfolgende UDP-Ports**: Game (`N`), Reserved (`N+1`) und BattlEye (`N+2`). Gemessen auf 1.29 bindet der Prozess `N` und `N+2`, `N+1` nie — der bleibt laut Bohemia reserviert. `SERVER_PORT` ist deshalb der **veröffentlichte Bereich** und nicht ein Port: `docker-compose.yml` gibt den Wert wortwörtlich weiter, und Compose kann nicht rechnen — kein `$((…))`, keine Kommandosubstitution, nur `${VAR}` und Defaults. Eine zweite Variable fürs Ende wäre eine zweite Wahrheit, ein Wrapper-Skript ein zweiter Startbefehl. Erlaubt ist ein Einzelport oder ein Bereich bis drei; eine Komma-Liste nicht, weil eine Docker-Port-Spec keine kennt. Das Panel nimmt die erste Zahl für `-port=`, `entrypoint.sh` weist alles Breitere zurück — sonst scheitert es auf die unangenehmste Art: der Server läuft, das Dashboard zeigt den Port, und niemand kommt rein.
+
+Der **Steam-Master-Port 8766/udp** wird **nicht** veröffentlicht — anders als bei jedem anderen DayZ-Image. Auf 1.29 bindet ihn nichts: acht Stichproben der UDP-Tabelle bei laufendem Server zeigen 2302, 2304, 2305 und 27016, nie 8766. Die RPT loggt zwar weiter `SteamGameServer_Init(0,8766,2302,27016,…)`, aber Steamworks hat den `usSteamPort` in SDK 1.51 (2021) aus der Signatur entfernt und den Port damit auch. Gelistet wird über den **Query-Port 27016**. Sollte ein Server wider Erwarten nicht in der Liste auftauchen, ist die Zeile `- "8766:8766/udp"` in `ports:` der erste Test.
 | `AUTO_INSTALL` | `true` | Serverdateien beim Containerstart installieren, falls nicht vorhanden |
 | `AUTO_START` | `false` | DayZ-Server nach erfolgreicher Installation automatisch starten |
 

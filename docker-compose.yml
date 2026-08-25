@@ -16,10 +16,12 @@ services:
 
     ports:
       - "${PANEL_PORT:-8080}:${PANEL_PORT:-8080}/tcp"                # panel (HTTP)
-      - "2302-2304:2302-2304/udp"                                    # game
+      # SERVER_PORT carries the whole range - game, reserved and BattlEye sit on
+      # N, N+1 and N+2 - because Compose cannot add and publishes what it reads.
+      # entrypoint.sh rejects anything wider than three ports.
+      - "${SERVER_PORT:-2302-2304}:${SERVER_PORT:-2302-2304}/udp"     # game
       - "${RCON_PORT:-2305}:${RCON_PORT:-2305}/udp"                  # BattlEye RCON
       - "${STEAM_QUERY_PORT:-27016}:${STEAM_QUERY_PORT:-27016}/udp"  # Steam query
-      - "8766:8766/udp"                                              # Steam master, fixed
 
     volumes:
       - ./data:/data            # or a named volume: dayz-data:/data
