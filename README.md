@@ -238,6 +238,9 @@ it under the same tag.
    while, and the output runs live.
 2. **Answer Steam Guard** if asked. The code field appears on the dashboard —
    the code goes straight to the running SteamCMD process and is never stored.
+   Only the first login needs it: SteamCMD keeps a session afterwards and the
+   panel logs in with that, so later runs go through untouched. On **Steam Guard
+   Mobile** the first login has to be approved from the phone as well.
 3. **Set an RCON password** under *Settings → General → BattlEye*. Without one
    RCON stays off, and with it you get the console, lock/unlock and everything
    the scheduler can do. Note that BattlEye only opens its port about two
@@ -338,6 +341,28 @@ re-download those.
 ---
 
 ## Release notes
+
+**1.2.4** — One Steam login, not one per job. The panel put the password on
+every SteamCMD command line, which forces a full credential login: SteamCMD
+names the difference itself, `Logging in using username/password.` against
+`Logging in using cached credentials.`. With email Steam Guard that is only
+wasteful; with **Steam Guard Mobile** every credential login has to be approved
+from the phone, so a server with updates on start asked for approval on every
+restart. `+login` now carries the username alone and reuses the session
+SteamCMD stores, and the password is typed in only when there is no session to
+reuse — the first run, or an expired token. Verified against a Guard Mobile
+account: the first job asks for approval once, every job after it logs in
+untouched. While the phone is being waited on the panel now says so, in the log
+and next to the job, instead of looking like a job that stopped; and a login
+nobody approves in time now reports that rather than `exit code 5`. As a side
+effect the password no longer appears in the container's process list.
+A job card on the dashboard also folds itself away five seconds after the
+job succeeds, instead of leaving the SteamCMD log open above the server
+controls. A failed one stays, since that log is the reason to read it.
+Finally, a stop no longer waits out its whole timeout on a server that has
+already finished: DayZ sometimes dies in its own teardown after `~DayZGame()`
+and never exits, and the panel now gives that ten seconds rather than sixty,
+and says the save was written before it kills the process.
 
 **1.2.3** — Changing `SERVER_PORT` works. The published game ports were written
 into `docker-compose.yml` by hand as `2302-2304`, so moving the port started the

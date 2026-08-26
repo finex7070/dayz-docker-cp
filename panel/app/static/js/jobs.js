@@ -47,6 +47,12 @@
 
   var IDLE_MS = 4000;   // nothing running: just notice when something starts
   var BUSY_MS = 1000;   // a job is running: keep the output moving
+  // How long a finished job's output stays up before the card folds away. Only
+  // a successful one: a failure is the reason the log is worth reading, and it
+  // stays until something else takes the card.
+  var DISMISS_MS = 5000;
+  var dismissTimer = null;
+  var dismissedId = "";
 
   function post(url, body) {
     return fetch(url, {
@@ -131,6 +137,12 @@
       cursor = 0;
       wasUnfinished = false;
       el.output.textContent = "";
+      // A new job takes the card back, however the last one ended.
+      dismissedId = "";
+      if (dismissTimer !== null) {
+        window.clearTimeout(dismissTimer);
+        dismissTimer = null;
+      }
     }
     if (!job.is_final) wasUnfinished = true;
 
@@ -140,6 +152,14 @@
     // were last updated.
     if (job.is_final && !wasUnfinished) {
       el.outputWrap.hidden = true;
+      if (!blocked) el.detail.textContent = baseDetail;
+      schedule(blocked ? BUSY_MS : IDLE_MS);
+      return;
+    }
+
+    // Already folded away by the timer below. Without this the next poll would
+    // put it straight back up.
+    if (dismissedId === job.id) {
       if (!blocked) el.detail.textContent = baseDetail;
       schedule(blocked ? BUSY_MS : IDLE_MS);
       return;
@@ -178,6 +198,15 @@
         window.location.reload();
       }, 1500);
       return;
+    }
+
+    if (job.is_final && job.state === "success" && dismissTimer === null) {
+      dismissTimer = window.setTimeout(function () {
+        dismissTimer = null;
+        dismissedId = job.id;
+        el.outputWrap.hidden = true;
+        el.detail.textContent = baseDetail;
+      }, DISMISS_MS);
     }
 
     schedule(running ? BUSY_MS : IDLE_MS);

@@ -9,6 +9,10 @@ This module therefore reads raw chunks from the pipe, keeps the unterminated
 remainder, and checks that remainder against the known prompts. When a Steam
 Guard prompt appears, the job switches to `needs_guard`, the UI asks the
 operator for the code, and the worker writes it back into the process.
+
+That prompt handling is also what makes the login work: `+login` carries the
+username alone so SteamCMD reuses the session it already has, and the password
+is typed in only when it says the cached credentials are gone. See _login_args.
 """
 
 from __future__ import annotations
@@ -56,10 +60,28 @@ _GUARD_PROMPT = re.compile(
     r"(steam\s*guard|two[- ]?factor|2fa)[^:]*:\s*$", re.IGNORECASE
 )
 
+# Steam Guard Mobile. SteamCMD announces the wait and then repeats
+# "Waiting for confirmation..." until the login is approved or Steam gives up:
+#
+#   This account is protected by a Steam Guard mobile authenticator.
+#   Please confirm the login in the Steam Mobile app on your phone.
+#   Waiting for confirmation...
+#
+# It is not a prompt, so nothing answered it and the run read as a job that had
+# simply stopped. Saying it once in the panel's own voice is the difference
+# between "this is hung" and "your phone is waiting".
+_MOBILE_APPROVAL = re.compile(
+    r"confirm the login in the steam mobile app|waiting for confirmation",
+    re.IGNORECASE,
+)
+
 # Output that means the run did not do what we asked, even when the exit code
 # is 0 - which SteamCMD does return in several failure cases.
 _FAILURE_PATTERNS = (
     (re.compile(r"two[- ]?factor code mismatch", re.I), "The Steam Guard code was wrong."),
+    (re.compile(r"(wait for confirmation timed out|timed out waiting for confirmation)", re.I),
+     "The login was not approved in the Steam mobile app in time. Start the job "
+     "again and confirm it on your phone."),
     (re.compile(r"invalid password", re.I), "Steam rejected the password."),
     (re.compile(r"rate limit exceeded", re.I),
      "Steam is rate limiting this account. Wait a few minutes before retrying."),
@@ -135,20 +157,31 @@ class SteamCmdService:
     # --- job wiring -------------------------------------------------------
 
     def _login_args(self) -> list[str]:
-        """+login, with the guard code when one came from the environment.
+        """+login with the username only, so the stored session is used.
 
-        Credentials go on the command line, the way every SteamCMD automation
-        does it: without a terminal, SteamCMD does not reliably fall back to
-        prompting, and a one-time guard code passed upfront avoids the
-        "Account Logon Denied" dead end. The prompt handling in _pump stays as
-        a fallback for the cases where it does ask. Downside is that the
-        credentials are visible in the container's process list; they are
-        masked everywhere the panel shows or logs the command.
+        The password is deliberately absent. SteamCMD keeps a session token
+        after the first successful login and says which path it took:
+
+            +login <user>              Logging in using cached credentials.
+            +login <user> <password>   Logging in using username/password.
+
+        Passing the password forces the second every single time. On an account
+        with email Steam Guard that is merely wasteful; with Steam Guard Mobile
+        every credential login has to be approved from the phone, so it turned
+        one approval into one per SteamCMD run - the panel hung on a prompt the
+        operator could not see.
+
+        Without a usable token SteamCMD prints "Cached credentials not found."
+        and asks for the password on stdin, which _answer_prompt fills in. So
+        the first run and an expired token still work, and the password no
+        longer sits in the container's process list. A guard code from the
+        environment is handled at its prompt for the same reason.
+
+        The stored session is keyed by account name, so changing STEAM_USERNAME
+        is enough to switch accounts: the new one finds no session of its own
+        and logs in with the password, leaving nothing to clean up by hand.
         """
-        login = ["+login", self.settings.steam_username, self.settings.steam_password]
-        if self.settings.steam_guard_code:
-            login.append(self.settings.steam_guard_code)
-        return login
+        return ["+login", self.settings.steam_username]
 
     def _start_app_update(self, kind: str, title: str, validate: bool) -> Job:
         app_id = self.settings.SERVER_APP_ID
@@ -235,6 +268,11 @@ class SteamCmdService:
         pending = ""
         failure: str | None = None
         prompts = 0
+        # Counted apart from `prompts`: STEAM_GUARD_CODE is for the first guard
+        # prompt, and since the login no longer carries the password a password
+        # prompt can come first and would otherwise use up that "first".
+        guard_prompts = 0
+        announced_approval = False
         job._saw_success = False  # type: ignore[attr-defined]
 
         # Progress redraws arrive many times per second. Keeping every one of
@@ -282,6 +320,14 @@ class SteamCmdService:
                 flush_progress()
                 job.log_line(line)
 
+                if not announced_approval and _MOBILE_APPROVAL.search(line):
+                    announced_approval = True
+                    job.detail = "Waiting for approval in the Steam mobile app"
+                    job.log_line(
+                        "[panel] Waiting for you to approve this login in the "
+                        "Steam mobile app on your phone"
+                    )
+
                 if _SUCCESS.search(line):
                     job._saw_success = True  # type: ignore[attr-defined]
                 if failure is None:
@@ -289,8 +335,10 @@ class SteamCmdService:
 
             # The remainder is where an unterminated prompt shows up.
             if pending.strip():
+                if _GUARD_PROMPT.search(pending.strip()):
+                    guard_prompts += 1
                 answered, prompt_failure = self._answer_prompt(
-                    job, proc, pending, secrets, prompts
+                    job, proc, pending, secrets, prompts, guard_prompts
                 )
                 if prompt_failure:
                     return prompt_failure
@@ -305,7 +353,8 @@ class SteamCmdService:
         return failure
 
     def _answer_prompt(
-        self, job: Job, proc: subprocess.Popen, pending: str, secrets: list[str], prompts: int
+        self, job: Job, proc: subprocess.Popen, pending: str, secrets: list[str],
+        prompts: int, guard_prompts: int
     ) -> tuple[bool, str | None]:
         """Reply to a password or Steam Guard prompt. Returns (answered, failure)."""
         text = pending.strip()
@@ -313,14 +362,17 @@ class SteamCmdService:
         if _PASSWORD_PROMPT.search(text):
             if prompts >= MAX_PROMPTS:
                 return False, "SteamCMD kept asking for credentials - giving up."
-            job.log_line("[panel] SteamCMD asked for the password, sending it")
+            # Expected on the first run and whenever the stored token has
+            # expired - see _login_args for why the password is not passed up
+            # front any more.
+            job.log_line("[panel] No usable Steam session - sending the password")
             return self._write_stdin(proc, self.settings.steam_password), None
 
         if _GUARD_PROMPT.search(text):
             if prompts >= MAX_PROMPTS:
                 return False, "The Steam Guard code was rejected repeatedly."
 
-            code = self.settings.steam_guard_code if prompts == 0 else ""
+            code = self.settings.steam_guard_code if guard_prompts <= 1 else ""
             if code:
                 job.log_line("[panel] Steam Guard requested, using STEAM_GUARD_CODE")
             else:
