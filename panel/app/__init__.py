@@ -41,7 +41,7 @@ from .services.server_settings import SettingsStore
 from .services.startup import StartupSequence
 from .services.steamcmd import SteamCmdService
 
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 
 STARTED_AT = time.time()
 
@@ -355,10 +355,10 @@ def environment_checks(settings: Settings) -> list[dict]:
             "detail": "present" if sdk_lib.exists() else "created after the first SteamCMD run",
         },
         {
-            "name": "Steam credentials",
+            "name": "Steam account",
             "ok": settings.steam_credentials_set,
             "detail": "set" if settings.steam_credentials_set
-            else "STEAM_USERNAME/STEAM_PASSWORD missing",
+            else "STEAM_USERNAME missing",
         },
         {
             "name": "Server files installed",

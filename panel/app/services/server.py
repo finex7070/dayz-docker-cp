@@ -43,6 +43,21 @@ MAX_CONSOLE_LINES = 2000
 # Measured on 1.29: the process exists for over two minutes before either.
 READY_MARKERS = ("Player connect enabled", "Average server FPS:")
 
+# What the engine prints once it has finished shutting down. On a clean stop
+# "--- Termination successfully completed ---" follows a second later, so by
+# this point the persistence is on disk and only process teardown is left.
+#
+# That last step is where DayZ sometimes dies without exiting - operators see
+# "double free or corruption (out)" after ~DayZGame() and the process then
+# hangs. Waiting out the full stop timeout for it buys nothing: the work is
+# done, and a process that has not exited by now will not.
+SHUTDOWN_DONE_MARKERS = ("~DayZGame()", "Termination successfully completed")
+
+# How long a process gets to disappear on its own after the engine said it was
+# finished. Generous for an exit that is only teardown, short enough that a
+# restart is not left waiting on a corpse.
+ENGINE_DONE_GRACE_SECONDS = 10
+
 # What the panel itself gets when the container stops, whatever the operator
 # set for a manual stop. The chain in PLAN.md 7.5 is built on this number:
 # it has to stay under gunicorn's graceful_timeout (50s), which has to stay
@@ -114,6 +129,7 @@ class ServerManager:
         self._console = LineBuffer(MAX_CONSOLE_LINES)
         self._exited = threading.Event()
         self._exited.set()
+        self._engine_done = threading.Event()
         self._crashes: deque[float] = deque(maxlen=len(RESTART_DELAYS) + 1)
         self._restart_timer: threading.Timer | None = None
         self._ready_timer: threading.Timer | None = None
@@ -328,6 +344,7 @@ class ServerManager:
             self._exited = exited
             self._cpu_sample = None
             self._cpu_percent = 0.0
+            self._engine_done.clear()
             self._arm_ready_timer()
 
         log.info("DayZ server started (pid %s, %s)", proc.pid, reason)
@@ -361,13 +378,19 @@ class ServerManager:
             exited.set()
 
     def _note_progress(self, line: str, proc: subprocess.Popen) -> None:
-        """Promote STARTING to RUNNING when the engine says it is open."""
+        """Follow the engine's own account of where it is."""
         with self._lock:
-            if self._proc is not proc or self._state is not ServerState.STARTING:
+            if self._proc is not proc:
                 return
-            if not any(marker in line for marker in READY_MARKERS):
-                return
-        self._mark_ready("the mission is loaded")
+            state = self._state
+
+        if any(marker in line for marker in SHUTDOWN_DONE_MARKERS):
+            if not self._engine_done.is_set():
+                self._engine_done.set()
+            return
+
+        if state is ServerState.STARTING and any(m in line for m in READY_MARKERS):
+            self._mark_ready("the mission is loaded")
 
     def _mark_ready(self, reason: str) -> None:
         with self._lock:
@@ -476,16 +499,43 @@ class ServerManager:
         except (OSError, ProcessLookupError):
             pass
 
-        try:
-            proc.wait(timeout=timeout)
-            return
-        except subprocess.TimeoutExpired:
-            pass
+        deadline = time.monotonic() + timeout
+        grace_until: float | None = None
 
-        self._console.append(
-            f"[panel] No shutdown within {timeout:.0f}s - killing the process"
-        )
-        log.warning("DayZ server ignored SIGTERM for %ss, sending SIGKILL", timeout)
+        while True:
+            left = deadline - time.monotonic()
+            if grace_until is not None:
+                left = min(left, grace_until - time.monotonic())
+            if left <= 0:
+                break
+            try:
+                proc.wait(timeout=min(left, 0.5))
+                return
+            except subprocess.TimeoutExpired:
+                pass
+
+            # The engine has said it is done, so the save is written and what is
+            # left is teardown. Give that a short grace instead of the operator's
+            # full timeout - see SHUTDOWN_DONE_MARKERS.
+            if grace_until is None and self._engine_done.is_set():
+                grace_until = time.monotonic() + ENGINE_DONE_GRACE_SECONDS
+                self._console.append(
+                    "[panel] The engine finished shutting down - allowing "
+                    f"{ENGINE_DONE_GRACE_SECONDS}s for the process to exit"
+                )
+
+        if self._engine_done.is_set():
+            message = (
+                "[panel] The engine shut down but the process did not exit - "
+                "killing it. Everything was saved first; DayZ sometimes dies in "
+                "its own teardown."
+            )
+            log.warning("DayZ server hung after shutting down, sending SIGKILL")
+        else:
+            message = f"[panel] No shutdown within {timeout:.0f}s - killing the process"
+            log.warning("DayZ server ignored SIGTERM for %ss, sending SIGKILL", timeout)
+
+        self._console.append(message)
         self._send_kill(proc)
 
     def _send_kill(self, proc: subprocess.Popen) -> None:
