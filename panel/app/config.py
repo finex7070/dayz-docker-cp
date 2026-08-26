@@ -373,7 +373,15 @@ class Settings:
 
     @property
     def steam_credentials_set(self) -> bool:
-        return bool(self.steam_username and self.steam_password)
+        """Enough to attempt a SteamCMD login.
+
+        The username alone is enough, because the password is only needed when
+        there is no stored session to reuse - see SteamCmdService._login_args.
+        An operator who has logged in once can then take STEAM_PASSWORD back out
+        of .env and keep it off the disk. If it turns out to be needed after all,
+        SteamCMD asks for it and the job fails with that as the reason.
+        """
+        return bool(self.steam_username)
 
     @property
     def server_installed(self) -> bool:

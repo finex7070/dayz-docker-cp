@@ -363,6 +363,9 @@ Finally, a stop no longer waits out its whole timeout on a server that has
 already finished: DayZ sometimes dies in its own teardown after `~DayZGame()`
 and never exits, and the panel now gives that ten seconds rather than sixty,
 and says the save was written before it kills the process.
+`STEAM_PASSWORD` is also optional now: it is read only when there is no
+session to reuse, so once the first login has gone through you can empty it
+again and keep it off the disk.
 
 **1.2.3** — Changing `SERVER_PORT` works. The published game ports were written
 into `docker-compose.yml` by hand as `2302-2304`, so moving the port started the

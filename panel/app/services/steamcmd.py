@@ -212,8 +212,7 @@ class SteamCmdService:
 
     def _run(self, job: Job, args: list[str], expect_success: bool) -> None:
         if not self.settings.steam_credentials_set:
-            self._fail(job, "Steam credentials are missing - set STEAM_USERNAME and "
-                            "STEAM_PASSWORD.")
+            self._fail(job, "No Steam account is configured - set STEAM_USERNAME.")
             return
 
         secrets = list(self.settings.steam_secrets())
@@ -362,6 +361,16 @@ class SteamCmdService:
         if _PASSWORD_PROMPT.search(text):
             if prompts >= MAX_PROMPTS:
                 return False, "SteamCMD kept asking for credentials - giving up."
+            if not self.settings.steam_password:
+                # Reached only with no stored session, since one would have
+                # logged in already. Saying which of the two is missing beats
+                # letting Steam answer "Invalid Password" to an empty string.
+                return False, (
+                    "SteamCMD needs the password: there is no stored Steam "
+                    "session to reuse and STEAM_PASSWORD is empty. Set it in "
+                    ".env, or run `steamcmd +login <user>` inside the container "
+                    "once to create the session by hand."
+                )
             # Expected on the first run and whenever the stored token has
             # expired - see _login_args for why the password is not passed up
             # front any more.

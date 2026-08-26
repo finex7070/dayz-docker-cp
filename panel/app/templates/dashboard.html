@@ -31,7 +31,7 @@
         </h2>
         <p class="text-secondary mb-0" id="job-detail">
           {% if not settings.steam_credentials_set %}
-            Steam credentials are missing.
+            No Steam account is configured.
           {% elif settings.server_installed %}
             {# Two dates, not one: an update that downloads nothing leaves the
                Steam manifest untouched, so "updated" alone could read as weeks
@@ -58,7 +58,7 @@
 
     {% if not settings.steam_credentials_set %}
       <div class="alert alert-warning mt-3 mb-0">
-        <strong>Steam credentials missing.</strong>
+        <strong>No Steam account configured.</strong>
         Set <code>STEAM_USERNAME</code> and <code>STEAM_PASSWORD</code> in your
         <code>.env</code> file - the DayZ server cannot be downloaded anonymously.
       </div>
