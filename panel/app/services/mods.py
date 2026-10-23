@@ -1099,10 +1099,20 @@ def _lowercase_tree(root: Path) -> int:
                 # already resolves to this very file. Treating that as a
                 # collision would skip every rename there.
                 if target.exists() and not source.samefile(target):
-                    # Two genuinely different entries differing only in case:
-                    # keep the newer one, which is what a case-insensitive
-                    # filesystem would have left behind.
-                    if source.stat().st_mtime <= target.stat().st_mtime:
+                    # Two genuinely different entries differing only in case.
+                    # Everything already here was lowercased on its way in, so
+                    # the mixed-case one is what was just copied over it, and
+                    # it wins, as on a case-insensitive filesystem. Keeping the
+                    # newer one instead kept both of every file an update left
+                    # unchanged - copy2 gives them the same mtime - and the
+                    # duplicate PBO changed the mod hash the server reports.
+                    if source.is_dir() and target.is_dir():
+                        # Merged, not replaced: the old directory may hold
+                        # files the new one does not. os.replace moves.
+                        shutil.copytree(source, target, dirs_exist_ok=True,
+                                        copy_function=os.replace)
+                        shutil.rmtree(source)
+                        renamed += 1
                         continue
                     if target.is_dir():
                         shutil.rmtree(target, ignore_errors=True)
